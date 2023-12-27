@@ -6,8 +6,8 @@ from typing import List, Tuple
 # hyperparameters
 batch_size = 32
 block_size = 8
-max_epochs = 3000
-eval_interval = 300
+max_epochs = 5000
+eval_interval = 500
 learning_rate = 1e-3
 device =  'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
@@ -90,12 +90,31 @@ class Head(nn.Module):
         out = wei @ v # [B, T, T] @ [B, T, C] -> [B, T, C]
         return out
 
+class MuliHeadAttention(nn.Module):
+    """multiple heads of self attention in parallel"""
+    def __init__(self, num_heads:int, heads_size:int) -> None:
+        super().__init__()
+        self.heads = nn.ModuleList([Head(heads_size) for _ in range(num_heads)])
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        performs a forward pass of the model
+
+        Parameters:
+        - x: a [B, T, C] tensor of floats representing the input sequence
+
+        Returns:
+        - out: a [B, T, C] tensor of floats representing the output sequence
+        """
+        out = torch.cat([h(x) for h in self.heads], dim=-1) # concat the heads on the channel dimension
+        return out
+
 class BigramLanguageModel(nn.Module):
     def __init__(self) -> None:   
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.sa_head = Head(n_embd)
+        self.sa_heads = MuliHeadAttention(num_heads=4, heads_size=n_embd//4) # 4 heads of 8 dims
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
     def forward(self, idx: torch.Tensor, targets:torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -110,10 +129,12 @@ class BigramLanguageModel(nn.Module):
         - logits: a [B*T, C] tensor of non-normalized scores over the vocabulary
         - loss: a scalar loss value if targets is not None
         """
+        B, T = idx.shape
+
         tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(block_size, device=device))
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device))
         x = tok_emb + pos_emb # [B, T, C]
-        x = self.sa_head(x)
+        x = self.sa_heads(x)
         logits = self.lm_head(tok_emb) 
 
         if targets is None:
@@ -137,9 +158,9 @@ class BigramLanguageModel(nn.Module):
         """
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens since pos embs runs out scope
-            idx = idx[:, -block_size:]
+            idx_cond = idx[:, -block_size:]
             # get the predictions for the next token
-            logits, loss = self.forward(idx)
+            logits, loss = self.forward(idx_cond)
             # focus on the last token
             logits = logits[:, -1, :] # this becomes [B, C]
             # apply softmax to get probabilities
@@ -149,7 +170,7 @@ class BigramLanguageModel(nn.Module):
             idx = torch.cat([idx, idx_next], dim=-1) # becomes [B, T+1]
         return idx
 
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel()
 m = model.to(device)
 
 # create a pytorch optimizer
@@ -172,6 +193,6 @@ for steps in range(max_epochs):
 
 print(loss.item())
 
-start_str = "Romeo:"
+start_str = "\n"
 idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
 print(decode(m.generate(idx = idx, max_new_tokens=500)[0].tolist()))
