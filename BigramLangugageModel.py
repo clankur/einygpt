@@ -8,7 +8,7 @@ batch_size = 32
 block_size = 8
 max_epochs = 3000
 eval_interval = 300
-learning_rate = 1e-2
+learning_rate = 1e-3
 device =  'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
 n_embd = 32
@@ -56,10 +56,46 @@ def estimate_loss() -> Tuple[float, float]:
     model.train()
     return out 
 
+class Head(nn.Module):
+    """one head of self attention"""
+
+    def __init__(self, head_size: int) -> None:
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
+    
+    def forward (self, x: torch.Tensor) -> torch.Tensor:
+        """
+        performs a forward pass of the model
+
+        Parameters:
+        - x: a [B, T, C] tensor of floats representing the input sequence
+
+        Returns:
+        - out: a [B, T, C] tensor of floats representing the output sequence
+        """
+        # compute the keys, queries and values
+        B, T, C = x.shape
+        k = self.key(x) # [B, T, C]
+        q = self.query(x) # [B, T, C]
+        # (C**-0.5) is a scaling factor to normalize the dot product
+        wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, T, C] @ [B, C, T] -> [B, T, T]
+        # decoder block
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # [B, T, T]
+        wei = F.softmax(wei, dim=-1) # [B, T, T]
+        # perform the weight aggregation of vals
+        v = self.value(x) # [B, T, C]
+        out = wei @ v # [B, T, T] @ [B, T, C] -> [B, T, C]
+        return out
+
 class BigramLanguageModel(nn.Module):
     def __init__(self) -> None:   
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.sa_head = Head(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
     def forward(self, idx: torch.Tensor, targets:torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -75,6 +111,9 @@ class BigramLanguageModel(nn.Module):
         - loss: a scalar loss value if targets is not None
         """
         tok_emb = self.token_embedding_table(idx)
+        pos_emb = self.position_embedding_table(torch.arange(block_size, device=device))
+        x = tok_emb + pos_emb # [B, T, C]
+        x = self.sa_head(x)
         logits = self.lm_head(tok_emb) 
 
         if targets is None:
@@ -97,6 +136,8 @@ class BigramLanguageModel(nn.Module):
         - max_token_len: the maximum number of tokens to generate
         """
         for _ in range(max_new_tokens):
+            # crop idx to the last block_size tokens since pos embs runs out scope
+            idx = idx[:, -block_size:]
             # get the predictions for the next token
             logits, loss = self.forward(idx)
             # focus on the last token
