@@ -90,12 +90,12 @@ class Head(nn.Module):
         out = wei @ v # [B, T, T] @ [B, T, C] -> [B, T, C]
         return out
 
-class MuliHeadAttention(nn.Module):
+class MultiHeadAttention(nn.Module):
     """multiple heads of self attention in parallel"""
     def __init__(self, num_heads:int, heads_size:int) -> None:
         super().__init__()
         self.heads = nn.ModuleList([Head(heads_size) for _ in range(num_heads)])
-    
+        self.proj = nn.Linear(n_embd, n_embd)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -107,6 +107,7 @@ class MuliHeadAttention(nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         out = torch.cat([h(x) for h in self.heads], dim=-1) # concat the heads on the channel dimension
+        out = self.proj(out) # what is the purpose of this? 
         return out
 
 class FeedForward(nn.Module):
@@ -136,7 +137,7 @@ class Block (nn.Module):
     def __init__(self, n_embd:int, n_head: int) -> None:
         super().__init__()
         heads_size = n_embd // n_head
-        self.sa_heads = MuliHeadAttention(num_heads=n_head, heads_size=heads_size)
+        self.sa_heads = MultiHeadAttention(num_heads=n_head, heads_size=heads_size)
         self.ffwd = FeedForward(n_embd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -149,7 +150,7 @@ class Block (nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
-        x = x + self.sa_heads(x)
+        x = x + self.sa_heads(x) # residual connection adding to sa heads
         x = x + self.ffwd(x)
         return x
 
