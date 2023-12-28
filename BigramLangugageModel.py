@@ -12,6 +12,9 @@ learning_rate = 1e-3
 device =  'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
 n_embd = 32
+n_layer = 6
+n_head = 6
+dropout = 0.2
 # -----
 
 torch.manual_seed(1337)
@@ -65,7 +68,8 @@ class Head(nn.Module):
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
-    
+        self.dropout = nn.Dropout(dropout)
+
     def forward (self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -80,11 +84,14 @@ class Head(nn.Module):
         B, T, C = x.shape
         k = self.key(x) # [B, T, C]
         q = self.query(x) # [B, T, C]
+
+        # computing the affiniities aka the attention scores
         # (C**-0.5) is a scaling factor to normalize the dot product
         wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, T, C] @ [B, C, T] -> [B, T, T]
         # decoder block
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # [B, T, T]
         wei = F.softmax(wei, dim=-1) # [B, T, T]
+        wei = self.dropout(wei)
         # perform the weight aggregation of vals
         v = self.value(x) # [B, T, C]
         out = wei @ v # [B, T, T] @ [B, T, C] -> [B, T, C]
@@ -96,6 +103,8 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(heads_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -108,6 +117,7 @@ class MultiHeadAttention(nn.Module):
         """
         out = torch.cat([h(x) for h in self.heads], dim=-1) # concat the heads on the channel dimension
         out = self.proj(out) # what is the purpose of this? 
+        out = self.dropout(out) # apply dropout
         return out
 
 class FeedForward(nn.Module):
@@ -117,7 +127,8 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(n_embd, 4*n_embd),
             nn.ReLU(),
-            nn.Linear(4*n_embd, n_embd)
+            nn.Linear(4*n_embd, n_embd),
+            nn.Dropout(dropout)
         )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -162,12 +173,8 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            nn.LayerNorm(n_embd)
-        )
+        self.blocks = nn.Sequentialz(*[Block(n_embd, n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
     def forward(self, idx: torch.Tensor, targets:torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -188,6 +195,7 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
         x = tok_emb + pos_emb # [B, T, C]
         x = self.blocks(x) # [B, T, C] 
+        x = self.ln_f(x) # [B, T, C]
         logits = self.lm_head(tok_emb) 
 
         if targets is None:
