@@ -9,11 +9,11 @@ block_size = 8
 max_epochs = 5000
 eval_interval = 500
 learning_rate = 1e-3
-device =  'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
 n_embd = 32
-n_layer = 6
-n_head = 6
+n_layer = 3
+n_head = 4
 dropout = 0.2
 # -----
 
@@ -24,8 +24,6 @@ with open("input.txt", "r", encoding="utf-8") as f:
 
 chars = sorted(list(set(text)))
 vocab_size = len(chars)
-
-print(''.join(chars), "\n", vocab_size)
 
 # making a mapping from character to integers and vice versa
 stoi = {ch: i for i, ch in enumerate(chars)}
@@ -46,7 +44,7 @@ def get_batch(split: str) -> (torch.Tensor, torch.Tensor):
     return x, y
 
 @torch.no_grad()
-def estimate_loss() -> Tuple[float, float]:
+def estimate_loss() -> dict:
     out = {}
     model.eval()
     for split in ['train', 'val']:
@@ -57,7 +55,7 @@ def estimate_loss() -> Tuple[float, float]:
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
-    return out 
+    return out
 
 class Head(nn.Module):
     """one head of self attention"""
@@ -125,9 +123,9 @@ class FeedForward(nn.Module):
     def __init__ (self, n_embd) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4*n_embd),
+            nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
-            nn.Linear(4*n_embd, n_embd),
+            nn.Linear(4 * n_embd, n_embd),
             nn.Dropout(dropout)
         )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -143,7 +141,7 @@ class FeedForward(nn.Module):
         return self.net(x)
     
 class Block (nn.Module):
-    """ a transformer block: intersperses communcication with computation"""
+    """ a transformer block: intersperses communication with computation"""
 
     def __init__(self, n_embd:int, n_head: int) -> None:
         super().__init__()
@@ -168,12 +166,12 @@ class Block (nn.Module):
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
         return x
 
-class BigramLanguageModel(nn.Module):
+class NanoGPTLanguageModel(nn.Module):
     def __init__(self) -> None:   
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequentialz(*[Block(n_embd, n_head) for _ in range(n_layer)])
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
@@ -196,7 +194,7 @@ class BigramLanguageModel(nn.Module):
         x = tok_emb + pos_emb # [B, T, C]
         x = self.blocks(x) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
-        logits = self.lm_head(tok_emb) 
+        logits = self.lm_head(x) 
 
         if targets is None:
             loss = None
@@ -231,7 +229,7 @@ class BigramLanguageModel(nn.Module):
             idx = torch.cat([idx, idx_next], dim=-1) # becomes [B, T+1]
         return idx
 
-model = BigramLanguageModel()
+model = NanoGPTLanguageModel()
 m = model.to(device)
 
 # create a pytorch optimizer
