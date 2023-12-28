@@ -139,6 +139,8 @@ class Block (nn.Module):
         heads_size = n_embd // n_head
         self.sa_heads = MultiHeadAttention(num_heads=n_head, heads_size=heads_size)
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd) 
+        self.ln2 = nn.LayerNorm(n_embd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -150,8 +152,9 @@ class Block (nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
-        x = x + self.sa_heads(x) # residual connection adding to sa heads
-        x = x + self.ffwd(x)
+        # we also perform layer normalization before being fed into the heads and ffwd
+        x = x + self.sa_heads(self.ln1(x)) # residual connection adding to sa heads
+        x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
         return x
 
 class BigramLanguageModel(nn.Module):
@@ -163,6 +166,7 @@ class BigramLanguageModel(nn.Module):
             Block(n_embd, n_head=4),
             Block(n_embd, n_head=4),
             Block(n_embd, n_head=4),
+            nn.LayerNorm(n_embd)
         )
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
