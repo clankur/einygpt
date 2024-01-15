@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple
-from transformers import BertTokenizer
 import nltk
 # hyperparameters
 batch_size = 32
@@ -16,7 +15,6 @@ n_embd = 32
 n_layer = 3
 n_head = 4
 dropout = 0.2
-num_querys = 1 
 # -----
 
 torch.manual_seed(1337)
@@ -24,14 +22,14 @@ torch.manual_seed(1337)
 with open("input.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
-# Load the tokenizer
-custom_vocab = ["\n"]  # Add newline character to the vocabulary
-tokenizer = BertTokenizer.from_pretrained("bert-base-uncased", additional_special_tokens=custom_vocab)
-vocab_size = tokenizer.vocab_size + 1
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
 
-# Define encoding and decoding functions using lambdas
-encode = lambda text: tokenizer.encode(text, add_special_tokens=True)  
-decode = lambda tokens: tokenizer.decode(tokens, skip_special_tokens=True)
+# making a mapping from character to integers and vice versa
+stoi = {ch: i for i, ch in enumerate(chars)}
+itos = {i:ch for i, ch in enumerate(chars)}
+encode = lambda s: [stoi[c] for c in s]
+decode = lambda l: ''.join([itos[i] for i in l])
 
 data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
@@ -82,11 +80,9 @@ class Head(nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
-        
 
         # compute the keys, queries and values
         B, T, C = x.shape
-
 
         # if use_cache
         if use_cache:
@@ -100,7 +96,7 @@ class Head(nn.Module):
                 v = torch.cat([self.cache_v, new_v], dim=1)
             else:
                 k, v = new_k, new_v
-            
+
             self.cache_k = k
             self.cache_v = v
         else:
@@ -108,7 +104,7 @@ class Head(nn.Module):
             v = self.value(x)  # [B, T, C]
 
         q = self.query(x) # [B, num_queries, C]
-        print (k.shape, v.shape, q.shape)
+
         # computing the affiniities aka the attention scores
         # (C**-0.5) is a scaling factor to normalize the dot product
         wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, num_queries, h] @ [B, h, T] -> [B, num_queries, T]
