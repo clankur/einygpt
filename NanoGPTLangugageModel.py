@@ -5,16 +5,16 @@ from typing import List, Tuple
 from transformers import BertTokenizer
 import nltk
 # hyperparameters
-batch_size = 64
-block_size = 256
+batch_size = 32
+block_size = 8
 max_epochs = 5000
 eval_interval = 500
-learning_rate = 3e-4
+learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 384 # every head is = 384 / 6 = 64 dims, C = 64?
-n_head = 6
-n_layer = 6
+n_embd = 32
+n_layer = 3
+n_head = 4
 dropout = 0.2
 num_querys = 1 
 # -----
@@ -65,7 +65,7 @@ class Head(nn.Module):
     def __init__(self, head_size: int) -> None:
         super().__init__()
         self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(num_querys, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
         self.dropout = nn.Dropout(dropout)
@@ -87,6 +87,7 @@ class Head(nn.Module):
         # compute the keys, queries and values
         B, T, C = x.shape
 
+
         # if use_cache
         if use_cache:
             # compute only new keys and values
@@ -99,7 +100,7 @@ class Head(nn.Module):
                 v = torch.cat([self.cache_v, new_v], dim=1)
             else:
                 k, v = new_k, new_v
-
+            
             self.cache_k = k
             self.cache_v = v
         else:
@@ -107,7 +108,7 @@ class Head(nn.Module):
             v = self.value(x)  # [B, T, C]
 
         q = self.query(x) # [B, num_queries, C]
-
+        print (k.shape, v.shape, q.shape)
         # computing the affiniities aka the attention scores
         # (C**-0.5) is a scaling factor to normalize the dot product
         wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, num_queries, h] @ [B, h, T] -> [B, num_queries, T]
@@ -117,7 +118,6 @@ class Head(nn.Module):
         wei = F.softmax(wei, dim=-1) # [B, T, T]
         wei = self.dropout(wei)
         # perform the weight aggregation of vals
-        v = self.value(x) # [B, T, C]
         out = wei @ v # [B, T, T] @ [B, T, C] -> [B, T, C]
         return out
 
@@ -154,6 +154,7 @@ class FeedForward(nn.Module):
             nn.Linear(4 * n_embd, n_embd),
             nn.Dropout(dropout)
         )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -192,12 +193,23 @@ class Block (nn.Module):
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
         return x
 
+class UseCacheSequential(nn.Module):
+    def __init__(self, *blocks):
+        super(UseCacheSequential, self).__init__()
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self, x, use_cache:bool=False):
+        for block in self.blocks:
+            x = block(x, use_cache=use_cache)
+        return x
+
+
 class NanoGPTLanguageModel(nn.Module):
     def __init__(self) -> None:   
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
+        self.blocks = UseCacheSequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
@@ -241,9 +253,10 @@ class NanoGPTLanguageModel(nn.Module):
         - idx: a [B, T] tensor of integers representing the input sequence
         - max_token_len: the maximum number of tokens to generate
         """
+        idx_next = idx
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens since pos embs runs out scope
-            idx_cond = idx[:, -block_size:]
+            idx_cond = idx_next[:, -block_size:]
             # get the predictions for the next token
             logits, loss = self.forward(idx_cond, use_cache=use_cache)
             # focus on the last token
