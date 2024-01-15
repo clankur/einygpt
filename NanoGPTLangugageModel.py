@@ -16,6 +16,7 @@ n_embd = 384 # every head is = 384 / 6 = 64 dims, C = 64?
 n_head = 6
 n_layer = 6
 dropout = 0.2
+num_querys = 1 
 # -----
 
 torch.manual_seed(1337)
@@ -64,13 +65,14 @@ class Head(nn.Module):
     def __init__(self, head_size: int) -> None:
         super().__init__()
         self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(num_querys, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
         self.dropout = nn.Dropout(dropout)
-        self.kvcache = None
+        self.cache_k = None
+        self.cache_v = None
 
-    def forward (self, x: torch.Tensor) -> torch.Tensor:
+    def forward (self, x: torch.Tensor, use_cache:bool=False) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -84,13 +86,33 @@ class Head(nn.Module):
 
         # compute the keys, queries and values
         B, T, C = x.shape
-        k = self.key(x) # [B, T, C]
-        q = self.query(x) # [B, T, C]
+
+        # if use_cache
+        if use_cache:
+            # compute only new keys and values
+            new_k = self.key(x)  # [B, T, C]
+            new_v = self.value(x)  # [B, T, C]
+            
+            # concatenate with cached keys and values
+            if self.cache_k is not None:
+                k = torch.cat([self.cache_k, new_k], dim=1)
+                v = torch.cat([self.cache_v, new_v], dim=1)
+            else:
+                k, v = new_k, new_v
+
+            self.cache_k = k
+            self.cache_v = v
+        else:
+            k = self.key(x)  # [B, T, C]
+            v = self.value(x)  # [B, T, C]
+
+        q = self.query(x) # [B, num_queries, C]
 
         # computing the affiniities aka the attention scores
         # (C**-0.5) is a scaling factor to normalize the dot product
-        wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, T, C] @ [B, C, T] -> [B, T, T]
-        # decoder block
+        wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, num_queries, h] @ [B, h, T] -> [B, num_queries, T]
+        
+        # causal mask aka decoder block
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # [B, T, T]
         wei = F.softmax(wei, dim=-1) # [B, T, T]
         wei = self.dropout(wei)
@@ -107,7 +129,7 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache:bool=False) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -117,7 +139,7 @@ class MultiHeadAttention(nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
-        out = torch.cat([h(x) for h in self.heads], dim=-1) # concat the heads on the channel dimension
+        out = torch.cat([h(x, use_cache=use_cache) for h in self.heads], dim=-1) # concat the heads on the channel dimension
         out = self.proj(out) # what is the purpose of this? 
         out = self.dropout(out) # apply dropout
         return out
@@ -155,7 +177,7 @@ class Block (nn.Module):
         self.ln1 = nn.LayerNorm(n_embd) 
         self.ln2 = nn.LayerNorm(n_embd)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache=False) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -166,7 +188,7 @@ class Block (nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         # we also perform layer normalization before being fed into the heads and ffwd
-        x = x + self.sa_heads(self.ln1(x)) # residual connection adding to sa heads
+        x = x + self.sa_heads(self.ln1(x), use_cache=use_cache) # residual connection adding to sa heads
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
         return x
 
@@ -179,7 +201,7 @@ class NanoGPTLanguageModel(nn.Module):
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
-    def forward(self, idx: torch.Tensor, targets:torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, idx: torch.Tensor, targets:torch.Tensor = None, use_cache:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         performs a forward pass of the model
 
@@ -197,7 +219,7 @@ class NanoGPTLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
         
         x = tok_emb + pos_emb # [B, T, C]
-        x = self.blocks(x) # [B, T, C] 
+        x = self.blocks(x, use_cache=use_cache) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
         logits = self.lm_head(x) 
 
@@ -211,7 +233,7 @@ class NanoGPTLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets)
         return logits, loss        
     
-    def generate (self, idx: torch.Tensor, max_new_tokens:int) -> torch.Tensor:
+    def generate (self, idx: torch.Tensor, max_new_tokens:int, use_cache:bool=True) -> torch.Tensor:
         """
         generates the next `max_token_len` tokens given an input sequence 
 
@@ -223,7 +245,7 @@ class NanoGPTLanguageModel(nn.Module):
             # crop idx to the last block_size tokens since pos embs runs out scope
             idx_cond = idx[:, -block_size:]
             # get the predictions for the next token
-            logits, loss = self.forward(idx_cond)
+            logits, loss = self.forward(idx_cond, use_cache=use_cache)
             # focus on the last token
             logits = logits[:, -1, :] # this becomes [B, C]
             # apply softmax to get probabilities
