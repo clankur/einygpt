@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple
-
+from transformers import BertTokenizer
+import nltk
 # hyperparameters
 batch_size = 64
 block_size = 256
@@ -22,14 +23,14 @@ torch.manual_seed(1337)
 with open("input.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
+# Load the tokenizer
+custom_vocab = ["\n"]  # Add newline character to the vocabulary
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased", additional_special_tokens=custom_vocab)
+vocab_size = tokenizer.vocab_size + 1
 
-# making a mapping from character to integers and vice versa
-stoi = {ch: i for i, ch in enumerate(chars)}
-itos = {i:ch for i, ch in enumerate(chars)}
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda l: ''.join([itos[i] for i in l])
+# Define encoding and decoding functions using lambdas
+encode = lambda text: tokenizer.encode(text, add_special_tokens=True)  
+decode = lambda tokens: tokenizer.decode(tokens, skip_special_tokens=True)
 
 data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
@@ -67,6 +68,7 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
         self.dropout = nn.Dropout(dropout)
+        self.kvcache = None
 
     def forward (self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -78,6 +80,8 @@ class Head(nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
+        
+
         # compute the keys, queries and values
         B, T, C = x.shape
         k = self.key(x) # [B, T, C]
@@ -191,6 +195,7 @@ class NanoGPTLanguageModel(nn.Module):
 
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
+        
         x = tok_emb + pos_emb # [B, T, C]
         x = self.blocks(x) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
@@ -203,7 +208,6 @@ class NanoGPTLanguageModel(nn.Module):
             B, T, C = logits.shape
             logits = logits.view(B*T, C)
             targets = targets.view(B*T)
-
             loss = F.cross_entropy(logits, targets)
         return logits, loss        
     
@@ -234,6 +238,7 @@ m = model.to(device)
 
 # create a pytorch optimizer
 optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
+m.train()
 
 # training the model
 for steps in range(max_epochs):
@@ -251,7 +256,8 @@ for steps in range(max_epochs):
     optimizer.step() # update parameters
 
 print(loss.item())
+m.eval()
 
-start_str = "\n"
+start_str = "The"
 idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
 print(decode(m.generate(idx = idx, max_new_tokens=500)[0].tolist()))
