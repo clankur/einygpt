@@ -46,6 +46,7 @@ def get_batch(split: str) -> (torch.Tensor, torch.Tensor):
 @torch.no_grad()
 def estimate_loss() -> dict:
     out = {}
+
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
@@ -67,10 +68,8 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
         self.dropout = nn.Dropout(dropout)
-        self.cache_k = None
-        self.cache_v = None
 
-    def forward (self, x: torch.Tensor, use_cache:bool=False) -> torch.Tensor:
+    def forward (self, x: torch.Tensor, use_cache:bool=False, kv_cache=(None, None)) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -86,19 +85,19 @@ class Head(nn.Module):
 
         # if use_cache
         if use_cache:
+            cache_k, cache_v = kv_cache
             # compute only new keys and values
             new_k = self.key(x)  # [B, T, C]
             new_v = self.value(x)  # [B, T, C]
             
             # concatenate with cached keys and values
-            if self.cache_k is not None:
-                k = torch.cat([self.cache_k, new_k], dim=1)
-                v = torch.cat([self.cache_v, new_v], dim=1)
+            if cache_k is not None:
+                k = torch.cat([cache_k, new_k], dim=1)
+                v = torch.cat([cache_v, new_v], dim=1)
             else:
                 k, v = new_k, new_v
 
-            self.cache_k = k
-            self.cache_v = v
+            kv_cache = (k, v)
         else:
             k = self.key(x)  # [B, T, C]
             v = self.value(x)  # [B, T, C]
@@ -185,7 +184,7 @@ class Block (nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         # we also perform layer normalization before being fed into the heads and ffwd
-        x = x + self.sa_heads(self.ln1(x), use_cache=use_cache) # residual connection adding to sa heads
+        x = x + self.sa_heads(self.ln1(x), use_cache=False) # residual connection adding to sa heads
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
         return x
 
@@ -208,7 +207,8 @@ class NanoGPTLanguageModel(nn.Module):
         self.blocks = UseCacheSequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
-    
+        self.history_length = 0
+
     def forward(self, idx: torch.Tensor, targets:torch.Tensor = None, use_cache:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         performs a forward pass of the model
@@ -222,10 +222,8 @@ class NanoGPTLanguageModel(nn.Module):
         - loss: a scalar loss value if targets is not None
         """
         B, T = idx.shape
-
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
-        
         x = tok_emb + pos_emb # [B, T, C]
         x = self.blocks(x, use_cache=use_cache) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
@@ -263,32 +261,38 @@ class NanoGPTLanguageModel(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1) # this is a [B, 1] tensor
             idx = torch.cat([idx, idx_next], dim=-1) # becomes [B, T+1]
         return idx
+    
+if __name__ == "__main__":
+    model = NanoGPTLanguageModel()
+    m = model.to(device)
 
-model = NanoGPTLanguageModel()
-m = model.to(device)
+    # create a pytorch optimizer
+    optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
+    m.train()
+    # training the model
+    for steps in range(max_epochs):
+        # every once in a while eval loss on train and val sets
 
-# create a pytorch optimizer
-optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
-m.train()
+        if steps % eval_interval == 0:
+            losses = estimate_loss()
+            print(f"Step: {steps}, Train loss: {losses['train']:.2f}, Val loss: {losses['val']:.2f}")   
+        # sample a batch of data
+        xb, yb = get_batch('train')
+        
+        position_embedding_table = nn.Embedding(block_size, n_embd)
 
-# training the model
-for steps in range(max_epochs):
-    # every once in a while eval loss on train and val sets
-    if steps % eval_interval == 0:
-        losses = estimate_loss()
-        print(f"Step: {steps}, Train loss: {losses['train']:.2f}, Val loss: {losses['val']:.2f}")   
-    # sample a batch of data
-    xb, yb = get_batch('train')
+        # evaluate the loss
+        logits, loss = m(xb, yb) 
+        optimizer.zero_grad(set_to_none=True) # clear the gradients
+        loss.backward() # compute gradients
+        optimizer.step() # update parameters
 
-    # evaluate the loss
-    logits, loss = m(xb, yb) 
-    optimizer.zero_grad(set_to_none=True) # clear the gradients
-    loss.backward() # compute gradients
-    optimizer.step() # update parameters
 
-print(loss.item())
-m.eval()
+    print(loss.item())
+    m.eval()
 
-start_str = "The"
-idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
-print(decode(m.generate(idx = idx, max_new_tokens=500)[0].tolist()))
+    torch.save(m.state_dict(), 'model_weights.pth')
+
+    start_str = "The"
+    idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
+    print(decode(m.generate(idx = idx, max_new_tokens=500)[0].tolist()))
