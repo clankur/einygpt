@@ -2,18 +2,18 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple
-import nltk
+
 # hyperparameters
-batch_size = 32
-block_size = 8
+batch_size = 64
+block_size = 256
 max_epochs = 5000
 eval_interval = 500
-learning_rate = 1e-3
+learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 32
-n_layer = 3
-n_head = 4
+n_embd = 384 # every head is = 384 / 6 = 64 dims, C = 64?
+n_head = 1
+n_layer = 6
 dropout = 0.2
 # -----
 
@@ -46,7 +46,6 @@ def get_batch(split: str) -> (torch.Tensor, torch.Tensor):
 @torch.no_grad()
 def estimate_loss() -> dict:
     out = {}
-
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
@@ -69,7 +68,7 @@ class Head(nn.Module):
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # define tril as a buffer so it is not a parameter of the model
         self.dropout = nn.Dropout(dropout)
 
-    def forward (self, x: torch.Tensor, use_cache:bool=False, kv_cache=(None, None)) -> torch.Tensor:
+    def forward (self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -79,52 +78,37 @@ class Head(nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
-
         # compute the keys, queries and values
         B, T, C = x.shape
-
-        # if use_cache
-        if use_cache:
-            cache_k, cache_v = kv_cache
-            # compute only new keys and values
-            new_k = self.key(x)  # [B, T, C]
-            new_v = self.value(x)  # [B, T, C]
-            
-            # concatenate with cached keys and values
-            if cache_k is not None:
-                k = torch.cat([cache_k, new_k], dim=1)
-                v = torch.cat([cache_v, new_v], dim=1)
-            else:
-                k, v = new_k, new_v
-
-            kv_cache = (k, v)
-        else:
-            k = self.key(x)  # [B, T, C]
-            v = self.value(x)  # [B, T, C]
-
-        q = self.query(x) # [B, num_queries, C]
+        k = self.key(x) # [B, T, C]
+        q = self.query(x) # [B, T, C]
 
         # computing the affiniities aka the attention scores
         # (C**-0.5) is a scaling factor to normalize the dot product
-        wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, num_queries, h] @ [B, h, T] -> [B, num_queries, T]
-        
-        # causal mask aka decoder block
+        wei = q @ k.transpose(-2, -1) * (C**-0.5) # [B, T, C] @ [B, C, T] -> [B, T, T]
+        # decoder block
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # [B, T, T]
         wei = F.softmax(wei, dim=-1) # [B, T, T]
         wei = self.dropout(wei)
         # perform the weight aggregation of vals
+        v = self.value(x) # [B, T, C]
         out = wei @ v # [B, T, T] @ [B, T, C] -> [B, T, C]
         return out
 
 class MultiHeadAttention(nn.Module):
     """multiple heads of self attention in parallel"""
-    def __init__(self, num_heads:int, heads_size:int) -> None:
+    def __init__(self, num_heads:int, head_size:int) -> None:
         super().__init__()
-        self.heads = nn.ModuleList([Head(heads_size) for _ in range(num_heads)])
+        self.num_heads = num_heads
+        self.head_size = head_size
+
+        self.key = nn.Linear(n_embd, n_embd, bias=False)
+        self.query = nn.Linear(n_embd, n_embd, bias=False)
+        self.value = nn.Linear(n_embd, n_embd, bias=False)
         self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, use_cache:bool=False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -134,8 +118,19 @@ class MultiHeadAttention(nn.Module):
         Returns:
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
-        out = torch.cat([h(x, use_cache=use_cache) for h in self.heads], dim=-1) # concat the heads on the channel dimension
-        out = self.proj(out) # what is the purpose of this? 
+        B, T, C = x.shape
+        # C = n * d where n is the number of heads and d is the head size
+        x = x.reshape(B, T, self.num_heads, self.head_size) # [B, T, C] -> [B, T, n, d]
+
+        k, v = self.key(x), self.value(x) # [B, K, n, d]
+        q = self.query(x) # [B, Q, n, d]
+        att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (self.head_size**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
+        att_wei = F.softmax(att_wei, dim=-1)
+        att_wei = self.dropout(att_wei)
+        out = torch.einsum('bqkn,bknd->bqnd', att_wei, v) # [B, Q, K, n] @ [B, K, n, d] -> [B, Q, n, d]
+
+        out = out.reshape(B, T, C) # [B, T, n, d] -> [B, T, C] 
+        out = self.proj(out) # what is the purpose of this? allow heads to communicate
         out = self.dropout(out) # apply dropout
         return out
 
@@ -149,7 +144,6 @@ class FeedForward(nn.Module):
             nn.Linear(4 * n_embd, n_embd),
             nn.Dropout(dropout)
         )
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -173,7 +167,7 @@ class Block (nn.Module):
         self.ln1 = nn.LayerNorm(n_embd) 
         self.ln2 = nn.LayerNorm(n_embd)
 
-    def forward(self, x: torch.Tensor, use_cache=False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -184,32 +178,20 @@ class Block (nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         # we also perform layer normalization before being fed into the heads and ffwd
-        x = x + self.sa_heads(self.ln1(x), use_cache=False) # residual connection adding to sa heads
+        x = x + self.sa_heads(self.ln1(x)) # residual connection adding to sa heads
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
         return x
-
-class UseCacheSequential(nn.Module):
-    def __init__(self, *blocks):
-        super(UseCacheSequential, self).__init__()
-        self.blocks = nn.ModuleList(blocks)
-
-    def forward(self, x, use_cache:bool=False):
-        for block in self.blocks:
-            x = block(x, use_cache=use_cache)
-        return x
-
 
 class NanoGPTLanguageModel(nn.Module):
     def __init__(self) -> None:   
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = UseCacheSequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
-        self.history_length = 0
-
-    def forward(self, idx: torch.Tensor, targets:torch.Tensor = None, use_cache:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
+    
+    def forward(self, idx: torch.Tensor, targets:torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         performs a forward pass of the model
 
@@ -222,10 +204,11 @@ class NanoGPTLanguageModel(nn.Module):
         - loss: a scalar loss value if targets is not None
         """
         B, T = idx.shape
+
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
         x = tok_emb + pos_emb # [B, T, C]
-        x = self.blocks(x, use_cache=use_cache) # [B, T, C] 
+        x = self.blocks(x) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
         logits = self.lm_head(x) 
 
@@ -236,10 +219,11 @@ class NanoGPTLanguageModel(nn.Module):
             B, T, C = logits.shape
             logits = logits.view(B*T, C)
             targets = targets.view(B*T)
+
             loss = F.cross_entropy(logits, targets)
         return logits, loss        
     
-    def generate (self, idx: torch.Tensor, max_new_tokens:int, use_cache:bool=True) -> torch.Tensor:
+    def generate (self, idx: torch.Tensor, max_new_tokens:int) -> torch.Tensor:
         """
         generates the next `max_token_len` tokens given an input sequence 
 
@@ -247,12 +231,11 @@ class NanoGPTLanguageModel(nn.Module):
         - idx: a [B, T] tensor of integers representing the input sequence
         - max_token_len: the maximum number of tokens to generate
         """
-        idx_next = idx
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens since pos embs runs out scope
-            idx_cond = idx_next[:, -block_size:]
+            idx_cond = idx[:, -block_size:]
             # get the predictions for the next token
-            logits, loss = self.forward(idx_cond, use_cache=use_cache)
+            logits, loss = self.forward(idx_cond)
             # focus on the last token
             logits = logits[:, -1, :] # this becomes [B, C]
             # apply softmax to get probabilities
@@ -268,18 +251,15 @@ if __name__ == "__main__":
 
     # create a pytorch optimizer
     optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
-    m.train()
+
     # training the model
     for steps in range(max_epochs):
         # every once in a while eval loss on train and val sets
-
         if steps % eval_interval == 0:
             losses = estimate_loss()
             print(f"Step: {steps}, Train loss: {losses['train']:.2f}, Val loss: {losses['val']:.2f}")   
         # sample a batch of data
         xb, yb = get_batch('train')
-        
-        position_embedding_table = nn.Embedding(block_size, n_embd)
 
         # evaluate the loss
         logits, loss = m(xb, yb) 
@@ -287,12 +267,10 @@ if __name__ == "__main__":
         loss.backward() # compute gradients
         optimizer.step() # update parameters
 
-
     print(loss.item())
-    m.eval()
 
     torch.save(m.state_dict(), 'model_weights.pth')
 
-    start_str = "The"
+    start_str = "\n"
     idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
     print(decode(m.generate(idx = idx, max_new_tokens=500)[0].tolist()))
