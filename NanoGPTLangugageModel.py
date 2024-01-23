@@ -119,11 +119,13 @@ class MultiHeadAttention(nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         B, T, C = x.shape
-        # C = n * d where n is the number of heads and d is the head size
-        x = x.reshape(B, T, self.num_heads, self.head_size) # [B, T, C] -> [B, T, n, d]
 
-        k, v = self.key(x), self.value(x) # [B, K, n, d]
-        q = self.query(x) # [B, Q, n, d]
+        k, v = self.key(x), self.value(x) # [B, T, C]
+        q = self.query(x) # [B, Q, C]
+
+        # C = n * d where n is the number of heads, d is the head dimension, C is the model dimension
+        k, v, q = [t.reshape(B, T, self.num_heads, self.head_size) for t in (k, v, q)] # [B, T, C] -> [B, T, n, d]
+
         att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (self.head_size**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
         att_wei = F.softmax(att_wei, dim=-1)
         att_wei = self.dropout(att_wei)
