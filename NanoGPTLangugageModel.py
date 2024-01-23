@@ -1,19 +1,19 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # hyperparameters
-batch_size = 64
-block_size = 256
+batch_size = 32
+block_size = 8
 max_epochs = 5000
 eval_interval = 500
-learning_rate = 3e-4
+learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 384 # every head is = 384 / 6 = 64 dims, C = 64?
-n_head = 1
-n_layer = 6
+n_embd = 32
+n_layer = 3
+n_head = 4
 dropout = 0.2
 # -----
 
@@ -108,7 +108,7 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache:bool = False, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -119,14 +119,17 @@ class MultiHeadAttention(nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         B, T, C = x.shape
-
-        k, v = self.key(x), self.value(x) # [B, T, C]
-        q = self.query(x) # [B, Q, C]
-
+        k, q, v = self.key(x), self.query(x), self.value(x) # [B, T, C]
+       
         # C = n * d where n is the number of heads, d is the head dimension, C is the model dimension
         k, v, q = [t.reshape(B, T, self.num_heads, self.head_size) for t in (k, v, q)] # [B, T, C] -> [B, T, n, d]
 
-        att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (self.head_size**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
+        if use_cache and kvcache is not None:
+            prev_k, prev_v = kvcache
+            k = torch.cat([prev_k, k], dim=1) # [B, K, n, d] -> [B, K+T, n, d]
+            v = torch.cat([prev_v, v], dim=1)
+            
+        att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (C**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
         att_wei = F.softmax(att_wei, dim=-1)
         att_wei = self.dropout(att_wei)
         out = torch.einsum('bqkn,bknd->bqnd', att_wei, v) # [B, Q, K, n] @ [B, K, n, d] -> [B, Q, n, d]
@@ -163,8 +166,8 @@ class Block (nn.Module):
 
     def __init__(self, n_embd:int, n_head: int) -> None:
         super().__init__()
-        heads_size = n_embd // n_head
-        self.sa_heads = MultiHeadAttention(num_heads=n_head, heads_size=heads_size)
+        head_size = n_embd // n_head
+        self.sa_heads = MultiHeadAttention(num_heads=n_head, head_size=head_size)
         self.ffwd = FeedForward(n_embd)
         self.ln1 = nn.LayerNorm(n_embd) 
         self.ln2 = nn.LayerNorm(n_embd)
