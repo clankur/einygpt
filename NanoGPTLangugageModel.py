@@ -129,15 +129,7 @@ class MultiHeadAttention(nn.Module):
             k = torch.cat([prev_k, k], dim=1) # [B, K, n, d] -> [B, K+T, n, d]
             v = torch.cat([prev_v, v], dim=1)
             
-<<<<<<< HEAD
         att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (C**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
-=======
-        att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (self.head_size**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
-        # casual masking
-        att_wei = att_wei.masked_fill(torch.tril(torch.ones(T, T, device=device)) == 0, float('-inf')) # [B, Q, K, n]
-        # idk how this line of code here works besides its gonna give a tril hopefully
-
->>>>>>> eaef454 (forgot to apply casual mask, added it)
         att_wei = F.softmax(att_wei, dim=-2)
         att_wei = self.dropout(att_wei)
         out = torch.einsum('bqkn,bknd->bqnd', att_wei, v) # [B, Q, K, n] @ [B, K, n, d] -> [B, Q, n, d]
@@ -203,8 +195,9 @@ class NanoGPTLanguageModel(nn.Module):
         self.blocks = nn.Sequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
-    
-    def forward(self, idx: torch.Tensor, targets:torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.history_length = 0
+
+    def forward(self, idx: torch.Tensor, targets:torch.Tensor = None, use_cache:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         performs a forward pass of the model
 
@@ -219,7 +212,11 @@ class NanoGPTLanguageModel(nn.Module):
         B, T = idx.shape
 
         tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device))
+        pos_emb = self.position_embedding_table(self.history_length + torch.arange(T, device=device))
+        
+        if use_cache:
+            self.history_length += T
+        
         x = tok_emb + pos_emb # [B, T, C]
         x = self.blocks(x) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
@@ -244,17 +241,19 @@ class NanoGPTLanguageModel(nn.Module):
         - idx: a [B, T] tensor of integers representing the input sequence
         - max_token_len: the maximum number of tokens to generate
         """
+        curr_idx = idx
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens since pos embs runs out scope
-            idx_cond = idx[:, -block_size:]
+            idx_cond = curr_idx[:, -block_size:]
             # get the predictions for the next token
-            logits, loss = self.forward(idx_cond)
+            logits, loss = self.forward(idx_cond, use_cache=True)
             # focus on the last token
             logits = logits[:, -1, :] # this becomes [B, C]
             # apply softmax to get probabilities
             probs = F.softmax(logits, dim=-1) # a [B, C] tensor
             # sample and get the next token
             idx_next = torch.multinomial(probs, num_samples=1) # this is a [B, 1] tensor
+            curr_idx = idx_next
             idx = torch.cat([idx, idx_next], dim=-1) # becomes [B, T+1]
         return idx
     
