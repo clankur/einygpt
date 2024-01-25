@@ -129,7 +129,15 @@ class MultiHeadAttention(nn.Module):
             k = torch.cat([prev_k, k], dim=1) # [B, K, n, d] -> [B, K+T, n, d]
             v = torch.cat([prev_v, v], dim=1)
             
+<<<<<<< HEAD
         att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (C**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
+=======
+        att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (self.head_size**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
+        # casual masking
+        att_wei = att_wei.masked_fill(torch.tril(torch.ones(T, T, device=device)) == 0, float('-inf')) # [B, Q, K, n]
+        # idk how this line of code here works besides its gonna give a tril hopefully
+
+>>>>>>> eaef454 (forgot to apply casual mask, added it)
         att_wei = F.softmax(att_wei, dim=-2)
         att_wei = self.dropout(att_wei)
         out = torch.einsum('bqkn,bknd->bqnd', att_wei, v) # [B, Q, K, n] @ [B, K, n, d] -> [B, Q, n, d]
