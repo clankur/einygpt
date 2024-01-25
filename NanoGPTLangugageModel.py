@@ -108,6 +108,9 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout)
 
+        self.register_buffer('tril', torch.tril(torch.ones(1, 1, block_size, block_size)))
+
+
     def forward(self, x: torch.Tensor, use_cache:bool = False, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -119,21 +122,27 @@ class MultiHeadAttention(nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         B, T, C = x.shape
-        k, q, v = self.key(x), self.query(x), self.value(x) # [B, T, C]
-       
-        # C = n * d where n is the number of heads, d is the head dimension, C is the model dimension
-        k, v, q = [t.reshape(B, T, self.num_heads, self.head_size) for t in (k, v, q)] # [B, T, C] -> [B, T, n, d]
-
+        k, v, q = self.key(x), self.value(x), self.query(x) # [B, T, C]
+    
+        # C = n * h where n is the number of heads, h is the head dimension, C is the model dimension
+        k, v, q = [t.reshape(B, T, self.num_heads, self.head_size) for t in (k, v, q)] # [B, T, C] -> [B, T, n, h]
+        k, v, q = [torch.transpose(x, 1, 2) for x in (k, v, q)] # [B, T, n, h] -> [B, n, T, h]
         if use_cache and kvcache is not None:
             prev_k, prev_v = kvcache
-            k = torch.cat([prev_k, k], dim=1) # [B, K, n, d] -> [B, K+T, n, d]
+            k = torch.cat([prev_k, k], dim=1) # [B, n, K, h] -> [B, n, K+T, h]
             v = torch.cat([prev_v, v], dim=1)
+            kvcache = (k, v)
             
-        att_wei = torch.einsum('bqnd,bknd->bqkn', q, k) * (C**-0.5) # [B, Q, n, d] @ [B, K, n, d] -> [B, Q, K, n]
-        att_wei = F.softmax(att_wei, dim=-2)
+        att_wei = torch.einsum('bnqh,bnkh->bnqk', q, k) * (self.head_size**-0.5) # [B, n, Q, h] @ [B, n, K, h] -> [B, n, Q, K]
+        # casual masking
+        att_wei = att_wei.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
+        # don't really get the dimensions defined in self.tril
+        
+        att_wei = F.softmax(att_wei, dim=-1)
         att_wei = self.dropout(att_wei)
-        out = torch.einsum('bqkn,bknd->bqnd', att_wei, v) # [B, Q, K, n] @ [B, K, n, d] -> [B, Q, n, d]
-
+        out = torch.einsum('bnqk,bnkh->bnqh', att_wei, v) # [B, n, Q, K] @ [B, n, K, h] -> [B, n, Q, h]
+        
+        out = torch.transpose(out, 1, 2) # [B, n, Q, h] -> [B, Q, n, h]
         out = out.reshape(B, T, C) # [B, T, n, d] -> [B, T, C] 
         out = self.proj(out) # what is the purpose of this? allow heads to communicate
         out = self.dropout(out) # apply dropout
