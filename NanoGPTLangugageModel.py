@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional
 # hyperparameters
 batch_size = 64
 block_size = 256
-max_epochs = 600
+max_epochs = 5000
 eval_interval = 500
 learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -111,7 +111,7 @@ class MultiHeadAttention(nn.Module):
         self.register_buffer('tril', torch.tril(torch.ones(1, 1, block_size, block_size)))
 
 
-    def forward(self, x: torch.Tensor, use_cache:bool = False, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache:bool= False, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -127,12 +127,13 @@ class MultiHeadAttention(nn.Module):
         # C = n * h where n is the number of heads, h is the head dimension, C is the model dimension
         k, v, q = [t.reshape(B, T, self.num_heads, self.head_size) for t in (k, v, q)] # [B, T, C] -> [B, T, n, h]
         k, v, q = [torch.transpose(x, 1, 2) for x in (k, v, q)] # [B, T, n, h] -> [B, n, T, h]
-        if use_cache and kvcache is not None:
-            prev_k, prev_v = kvcache
-            k = torch.cat([prev_k, k], dim=1) # [B, n, K, h] -> [B, n, K+T, h]
-            v = torch.cat([prev_v, v], dim=1)
+        if use_cache:
+            if kvcache:
+                prev_k, prev_v = kvcache
+                k = torch.cat([prev_k, k], dim=2) # [B, n, K, h] -> [B, n, K+T, h]
+                v = torch.cat([prev_v, v], dim=2)
             kvcache = (k, v)
-            
+        
         att_wei = torch.einsum('bnqh,bnkh->bnqk', q, k) * (self.head_size**-0.5) # [B, n, Q, h] @ [B, n, K, h] -> [B, n, Q, K]
         # casual masking
         att_wei = att_wei.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
@@ -146,7 +147,7 @@ class MultiHeadAttention(nn.Module):
         out = out.reshape(B, T, C) # [B, T, n, d] -> [B, T, C] 
         out = self.proj(out) # what is the purpose of this? allow heads to communicate
         out = self.dropout(out) # apply dropout
-        return out
+        return out, kvcache
 
 class FeedForward(nn.Module):
     """ simple linear layer followed by a non-linearity and another linear layer"""
@@ -180,8 +181,9 @@ class Block (nn.Module):
         self.ffwd = FeedForward(n_embd)
         self.ln1 = nn.LayerNorm(n_embd) 
         self.ln2 = nn.LayerNorm(n_embd)
+        self.kvcache = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache:bool) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -192,8 +194,19 @@ class Block (nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         # we also perform layer normalization before being fed into the heads and ffwd
-        x = x + self.sa_heads(self.ln1(x)) # residual connection adding to sa heads
+        heads_out, self.kvcache = self.sa_heads(self.ln1(x), use_cache=use_cache, kvcache=self.kvcache)
+        x = x + heads_out # residual connection adding to sa heads
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
+        return x
+    
+class UseCacheSequential(nn.Module):
+    def __init__(self, *blocks):
+        super(UseCacheSequential, self).__init__()
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self, x, use_cache:bool):
+        for block in self.blocks:
+            x = block(x, use_cache=use_cache)
         return x
 
 class NanoGPTLanguageModel(nn.Module):
@@ -201,7 +214,7 @@ class NanoGPTLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
+        self.blocks = UseCacheSequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
         self.history_length = 0
@@ -221,13 +234,13 @@ class NanoGPTLanguageModel(nn.Module):
         B, T = idx.shape
 
         tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(self.history_length + torch.arange(T, device=device))
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) + self.history_length
         
         if use_cache:
             self.history_length += T
         
         x = tok_emb + pos_emb # [B, T, C]
-        x = self.blocks(x) # [B, T, C] 
+        x = self.blocks(x, use_cache=use_cache) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
         logits = self.lm_head(x) 
 
