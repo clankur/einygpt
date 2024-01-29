@@ -111,7 +111,7 @@ class MultiHeadAttention(nn.Module):
         self.register_buffer('tril', torch.tril(torch.ones(1, 1, block_size, block_size)))
 
 
-    def forward(self, x: torch.Tensor, use_cache:bool= False, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache:bool, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -130,6 +130,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             if kvcache:
                 prev_k, prev_v = kvcache
+                prev_k, prev_v = prev_k[:, :, :block_size-1, :], prev_v[:, :, :block_size-1, :]
                 k = torch.cat([prev_k, k], dim=2) # [B, n, K, h] -> [B, n, K+T, h]
                 v = torch.cat([prev_v, v], dim=2)
             kvcache = (k, v)
@@ -159,6 +160,7 @@ class FeedForward(nn.Module):
             nn.Linear(4 * n_embd, n_embd),
             nn.Dropout(dropout)
         )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         performs a forward pass of the model
@@ -181,9 +183,8 @@ class Block (nn.Module):
         self.ffwd = FeedForward(n_embd)
         self.ln1 = nn.LayerNorm(n_embd) 
         self.ln2 = nn.LayerNorm(n_embd)
-        self.kvcache = None
 
-    def forward(self, x: torch.Tensor, use_cache:bool) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache:bool, kvcache:Optional[Tuple[torch.Tensor, torch.Tensor]]=None) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -194,27 +195,18 @@ class Block (nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         # we also perform layer normalization before being fed into the heads and ffwd
-        heads_out, self.kvcache = self.sa_heads(self.ln1(x), use_cache=use_cache, kvcache=self.kvcache)
+        heads_out, kvcache = self.sa_heads(self.ln1(x), use_cache=use_cache, kvcache=kvcache)
         x = x + heads_out # residual connection adding to sa heads
         x = x + self.ffwd(self.ln2(x)) # residual connection adding to ffwd
-        return x
-    
-class UseCacheSequential(nn.Module):
-    def __init__(self, *blocks):
-        super(UseCacheSequential, self).__init__()
-        self.blocks = nn.ModuleList(blocks)
-
-    def forward(self, x, use_cache:bool):
-        for block in self.blocks:
-            x = block(x, use_cache=use_cache)
-        return x
+        return x, kvcache
 
 class NanoGPTLanguageModel(nn.Module):
     def __init__(self) -> None:   
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = UseCacheSequential(*[Block(n_embd, n_head) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([Block(n_embd, n_head) for _ in range(n_layer)])
+        self.blocks_kvcache = [None for _ in range(n_layer)]
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
         self.history_length = 0
@@ -241,7 +233,8 @@ class NanoGPTLanguageModel(nn.Module):
             self.history_length += T
         
         x = tok_emb + pos_emb # [B, T, C]
-        x = self.blocks(x, use_cache=use_cache) # [B, T, C] 
+        for block, kvcache in zip(self.blocks, self.blocks_kvcache):
+            x, kvcache = block(x, use_cache=use_cache, kvcache=kvcache) # [B, T, C] 
         x = self.ln_f(x) # [B, T, C]
         logits = self.lm_head(x) 
 
