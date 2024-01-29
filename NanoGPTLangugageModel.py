@@ -229,7 +229,6 @@ class NanoGPTLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device) + self.history_length) 
         
         if use_cache:
-            print(self.history_length)
             self.history_length += T
         
         x = tok_emb + pos_emb # [B, T, C]
@@ -301,4 +300,4 @@ if __name__ == "__main__":
 
     start_str = "\n"
     idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
-    print(decode(m.generate(idx = idx, max_new_tokens=256)[0].tolist()))
+    print(decode(m.generate(idx = idx, max_new_tokens=block_size)[0].tolist()))
