@@ -145,7 +145,7 @@ class MultiHeadAttention(nn.Module):
         out = torch.einsum('bnqk,bnkh->bnqh', att_wei, v) # [B, n, Q, K] @ [B, n, K, h] -> [B, n, Q, h]
         
         out = torch.transpose(out, 1, 2) # [B, n, Q, h] -> [B, Q, n, h]
-        out = out.reshape(B, T, C) # [B, T, n, d] -> [B, T, C] 
+        out = out.reshape(B, T, C) # [B, T, n, h] -> [B, T, C] 
         out = self.proj(out) # what is the purpose of this? allow heads to communicate
         out = self.dropout(out) # apply dropout
         return out, kvcache
@@ -208,9 +208,8 @@ class NanoGPTLanguageModel(nn.Module):
         self.blocks = nn.ModuleList([Block(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
-        self.history_length = 0
 
-    def forward(self, idx: torch.Tensor, targets:torch.Tensor=None, use_cache:bool=False, blocks_kvcache:List[Optional[torch.tensor]]=[]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, idx: torch.Tensor, targets:torch.Tensor=None, use_cache:bool=False, blocks_kvcache:Optional[List[Optional[torch.tensor]]]=None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         performs a forward pass of the model
 
@@ -225,14 +224,12 @@ class NanoGPTLanguageModel(nn.Module):
         B, T = idx.shape
 
         tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device) + self.history_length) 
-        
-        if use_cache:
-            self.history_length += T
+        history_length = 0 if not blocks_kvcache or not blocks_kvcache[0] else blocks_kvcache[0][0].shape[2]
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device) + history_length)
         
         x = tok_emb + pos_emb # [B, T, C]
         new_kvcaches = []
-        for i, (block, kvcache) in enumerate(zip(self.blocks, blocks_kvcache)):
+        for block, kvcache in zip(self.blocks, blocks_kvcache):
             x, new_cache = block(x, use_cache=use_cache, kvcache=kvcache) # [B, T, C] 
             new_kvcaches.append(new_cache)
         x = self.ln_f(x) # [B, T, C]
@@ -262,10 +259,8 @@ class NanoGPTLanguageModel(nn.Module):
         curr_idx = idx
         blocks_kvcache = [None for _ in range(n_layer)]
         for _ in range(max_new_tokens):
-            # crop idx to the last block_size tokens since pos embs runs out scope
-            idx_cond = curr_idx[:, -block_size:]
             # get the predictions for the next token
-            logits, loss, blocks_kvcache = self.forward(idx_cond, use_cache=True, blocks_kvcache=blocks_kvcache)
+            logits, loss, blocks_kvcache = self.forward(curr_idx, use_cache=True, blocks_kvcache=blocks_kvcache)
             # focus on the last token
             logits = logits[:, -1, :] # this becomes [B, C]
             # apply softmax to get probabilities
