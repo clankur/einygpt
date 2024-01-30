@@ -4,16 +4,16 @@ from torch.nn import functional as F
 from typing import List, Tuple, Optional
 
 # hyperparameters
-batch_size = 64
-block_size = 256
+batch_size = 32
+block_size = 8
 max_epochs = 5000
 eval_interval = 500
-learning_rate = 3e-4
+learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 384 # every head is = 384 / 6 = 64 dims, C = 64?
-n_head = 6
-n_layer = 6
+n_embd = 32
+n_layer = 3
+n_head = 4
 dropout = 0.2
 # -----
 
@@ -248,7 +248,7 @@ class NanoGPTLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets)
         return logits, loss        
     
-    def generate (self, idx: torch.Tensor, max_new_tokens:int) -> torch.Tensor:
+    def generate (self, idx: torch.Tensor, max_new_tokens:int, use_cache:bool=True) -> torch.Tensor:
         """
         generates the next `max_token_len` tokens given an input sequence 
 
@@ -261,7 +261,7 @@ class NanoGPTLanguageModel(nn.Module):
             # crop idx to the last block_size tokens since pos embs runs out scope
             idx_cond = curr_idx[:, -block_size:]
             # get the predictions for the next token
-            logits, loss = self.forward(idx_cond, use_cache=True)
+            logits, loss = self.forward(idx_cond, use_cache=use_cache)
             # focus on the last token
             logits = logits[:, -1, :] # this becomes [B, C]
             # apply softmax to get probabilities
@@ -300,4 +300,4 @@ if __name__ == "__main__":
 
     start_str = "\n"
     idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
-    print(decode(m.generate(idx = idx, max_new_tokens=block_size)[0].tolist()))
+    print(decode(m.generate(idx = idx, max_new_tokens=block_size, use_cache=False)[0].tolist()))
