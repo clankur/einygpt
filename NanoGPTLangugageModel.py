@@ -299,4 +299,4 @@ if __name__ == "__main__":
 
     start_str = "\n"
     idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
-    print(decode(m.generate(idx = idx, max_new_tokens=block_size, use_cache=False)[0].tolist()))
+    print(decode(m.generate(idx = idx, max_new_tokens=block_size)[0].tolist()))
