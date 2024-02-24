@@ -37,7 +37,6 @@ train_data, val_data = data[:n], data[n:]
 
 BlocksKVCacheReturnType = List[Optional[torch.Tensor]]
 
-
 class MultiHeadAttention(nn.Module):
     """multiple heads of self attention in parallel"""
 

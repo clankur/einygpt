@@ -2,6 +2,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from NanoGPTLangugageModel import NanoGPTLanguageModel, encode, decode, train_data, val_data, block_size, device
+from clearml import Task
+from datetime import datetime
+import torch
+
 
 batch_size = 64
 learning_rate = 3e-4
@@ -32,6 +36,18 @@ def estimate_loss(model) -> dict:
     return out
 
 if __name__ == "__main__":
+    
+    # Get the current date and time
+    current_date_time = datetime.now()
+
+    # Format the date and time in a string
+    formatted_date_time = current_date_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # import hydra
+
+    task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
+    task.execute_remotely('default', clone=False, exit_process=True)
+
     model = NanoGPTLanguageModel()
     m = model.to(device)
 
@@ -48,7 +64,10 @@ if __name__ == "__main__":
         xb, yb = get_batch('train')
 
         # evaluate the loss
-        logits, loss = m(xb, yb) 
+        logits, loss = m(xb, yb)
+
+        task.set_last_metrics({'loss': loss.item()}, plot_name='loss', series_name='loss')
+
         optimizer.zero_grad(set_to_none=True) # clear the gradients
         loss.backward() # compute gradients
         optimizer.step() # update parameters
