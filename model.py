@@ -47,12 +47,14 @@ class GptLanguageModel (nn.Module):
         self.head_dim = self.n_embd // self.n_head
 
         self.attention_k = torch.ones(
-            (self.n_embd, self.n_head, self.head_dim))  # [n, h]
-        self.attention_q = torch.ones((self.n_embd, self.n_head, self.head_dim))
-        self.attention_v = torch.ones((self.n_embd, self.n_head, self.head_dim))
+            (self.n_embd, self.n_head, self.head_dim))  # [C, h, d]
+        self.attention_q = torch.ones(
+            (self.n_embd, self.n_head, self.head_dim))
+        self.attention_v = torch.ones(
+            (self.n_embd, self.n_head, self.head_dim))
 
         # for communication between attention heads
-        self.mha_proj = torch.ones((self.n_embd, self.n_head, self.head_dim))
+        self.out_proj = torch.ones((self.n_embd, self.n_head, self.head_dim))
 
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -66,27 +68,32 @@ class GptLanguageModel (nn.Module):
             0] else blocks_kvcache[0][0].shape[2]
         pos_emb = self.position_emb_table[history_length:history_length + T]
 
-        x = tok_emb + pos_emb  # [B, T, C]
+        x = tok_emb + pos_emb  # [B, T, C]]
 
         for layer in range(self.n_layer):
             kv_cache = blocks_kvcache[layer] if blocks_kvcache else None
-            k, v, q = [torch.einsum('btc,cnh->btnh', x, proj)
-                       for proj in (self.attention_k, self.attention_q, self.attention_v)]
-            
+
+            projections = torch.stack(
+                [self.attention_k, self.attention_v, self.attention_q, self.out_proj], dim=0) # [4, C, h, d]
+
+            k, v, q, o = torch.einsum('btc,schd->sbthd', x, projections)
             # will reduce on c dimension
+
             if blocks_kvcache:  # not None if we are using cache
                 if kv_cache:
-                    prev_k, prev_v = [cache[:, :, -self.block_size - 1:, :] for cache in kv_cache] # truncate the first token
-                    
+                    prev_k, prev_v = [cache[:, :, -self.block_size - 1:, :]
+                                      for cache in kv_cache]  # truncate the first token
+
                     # [B, n, K, h] -> [B, n, K+T, h]
-                    k, v = [torch.cat([prev_x, x], dim=2)
-                            for prev_x, x in [(prev_k, k), (prev_v, v)]]
+                    k, v = [torch.cat([prev_elmnt, elmnt], dim=2)
+                            for prev_elmnt, elmnt in [(prev_k, k), (prev_v, v)]]
 
                 blocks_kvcache[layer] = (k, v)
-            
+
             # need to transpose to [B, n, T, h]
-            k, v, q = [x.transpose(1, 2) for x in (k, v, q)]
-            att_wei = torch.einsum('bnqh,bnkh->bnqk', q, k) * (self.head_dim ** -0.5)
+            k, v, q = [kvq_proj.transpose(1, 2) for kvq_proj in (k, v, q)]
+            att_wei = torch.einsum('bnqh,bnkh->bnqk', q,
+                                   k) * (self.head_dim ** -0.5)
 
     def generate(self, idx: str, max_new_tokens: int) -> str:
         """
