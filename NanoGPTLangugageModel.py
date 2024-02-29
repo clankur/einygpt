@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
 
+KVCacheType = List[Optional[torch.Tensor]]
+
 # hyperparameters
 block_size = 256
 max_epochs = 5000
@@ -27,15 +29,13 @@ vocab_size = len(chars)
 # making a mapping from character to integers and vice versa
 stoi = {ch: i for i, ch in enumerate(chars)}
 itos = {i: ch for i, ch in enumerate(chars)}
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda l: ''.join([itos[i] for i in l])
-
+def encode(s): return [stoi[c] for c in s]
+def decode(l): return ''.join([itos[i] for i in l])
 
 data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
 train_data, val_data = data[:n], data[n:]
 
-BlocksKVCacheReturnType = List[Optional[torch.Tensor]]
 
 class MultiHeadAttention(nn.Module):
     """multiple heads of self attention in parallel"""
@@ -168,7 +168,7 @@ class NanoGPTLanguageModel(nn.Module):
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
-    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, blocks_kvcache: List[Optional[torch.tensor]] = [None] * n_layer) -> Tuple[torch.Tensor, torch.Tensor, BlocksKVCacheReturnType]:
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, blocks_kvcache: KVCacheType = [None] * n_layer) -> Tuple[torch.Tensor, torch.Tensor, KVCacheType]:
         """
         performs a forward pass of the model
 
@@ -218,7 +218,7 @@ class NanoGPTLanguageModel(nn.Module):
         - max_token_len: the maximum number of tokens to generate
         """
         curr_idx = idx
-        blocks_kvcache = [None for _ in range(n_layer)]
+        blocks_kvcache = [None] * n_layer
         for _ in range(max_new_tokens):
             # get the predictions for the next token
             logits, loss, blocks_kvcache = self.forward(
