@@ -41,26 +41,31 @@ class GptLanguageModel (nn.Module):
         self.position_emb_table = torch.ones((self.block_size, self.n_embd))
 
         # MLP projection matrices
-        self.w_in = torch.ones((self.n_embd, 4 * self.n_embd))
-        self.w_out = torch.ones((4 * self.n_embd, self.n_embd))
+        self.w_in = torch.randn(
+            (self.n_embd, 4 * self.n_embd)) / self.n_embd ** 0.5
+        self.w_out = torch.ones(
+            (4 * self.n_embd, self.n_embd) / (4 * self.n_embd) ** 0.5)
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
 
-        self.attention_k = torch.ones(
-            (self.n_embd, self.n_head, self.head_dim))  # [C, h, d]
+        self.attention_k = torch.randn(
+            (self.n_embd, self.n_head, self.head_dim)) ** self.head_dim ** 0.5  # [C, h, d]
         self.attention_q = torch.ones(
-            (self.n_embd, self.n_head, self.head_dim))
+            (self.n_embd, self.n_head, self.head_dim)) ** self.head_dim ** 0.5
         self.attention_v = torch.ones(
-            (self.n_embd, self.n_head, self.head_dim))
+            (self.n_embd, self.n_head, self.head_dim)) ** self.head_dim ** 0.5
 
         # for communication between attention heads
-        self.out_proj = torch.ones((self.n_head, self.head_dim, self.n_embd)) # [h, d, C]
+        self.out_proj = torch.ones(
+            (self.n_head, self.head_dim, self.n_embd))  # [h, d, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
 
-    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[BlocksKVCacheType]]:
+        self.lm_head = torch.ones((self.n_embd, self.vocab_size))
+
+    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[BlocksKVCacheType]]:
         """
         performs a forward pass of the model
         """
@@ -72,9 +77,10 @@ class GptLanguageModel (nn.Module):
             0] else blocks_kvcache[0][0].shape[2]
         pos_emb = self.position_emb_table[history_length:history_length + T]
 
-        x = tok_emb + pos_emb  # [B, T, C]]
+        x = tok_emb + pos_emb  # [B, T, C]
 
         for layer in range(self.n_layer):
+            x = F.layer_norm(x, (B, T, C))
             kv_cache = blocks_kvcache[layer] if blocks_kvcache else None
 
             projections = torch.stack(
@@ -96,7 +102,6 @@ class GptLanguageModel (nn.Module):
                 blocks_kvcache[layer] = (k, v)
 
             # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
-
             att_wei = torch.einsum('bhkd,bhqd->bhqk', q,
                                    k) * (self.head_dim ** -0.5)
             # casual masking
@@ -105,18 +110,54 @@ class GptLanguageModel (nn.Module):
             )
 
             att_wei = F.softmax(att_wei, dim=-1)
-            # att_wei = self.dropout(att_wei)
+            att_wei = F.dropout(att_wei, p=self.dropout,
+                                training=self.training)
 
             # [B, h, Q, K] @ [B, h, K, d] -> [B, h, Q, d]
             out = torch.einsum('bhqk,bhkd->bhqd', att_wei, v)
 
             # [B, h, Q, d] @ [h, d, C] -> [B, Q, C]
             out = torch.einsum('bhqd,hdc->bqc', out, self.out_proj)
-            # out = self.dropout(out)
-            return out, kv_cache
+            out = F.dropout(out, p=self.dropout, training=self.training)
+
+            x = F.layer_norm(x + out, (B, T, C))
+            x = x + out  # residual connection
+
+            # MLP block
+            # [B, T, C] @ [C, 4C] -> [B, T, 4C]
+            mlp_hidden = torch.einsum('btc,cd->btd', x, self.w_in)
+            mlp_hidden = F.relu(mlp_hidden)
+
+            # [B, T, 4C] @ [4C, C] -> [B, T, C]
+            mlp_out = torch.einsum('btd,dc->btc', mlp_hidden, self.w_out)
+            mlp_out = F.dropout(x, p=self.dropout, training=self.training)
+            x = x + mlp_out  # residual connection
+
+        x = F.layer_norm(x, (B, T, C))
+        logits = torch.einsum('btc,cd->btd', x, self.lm_head)
+        loss = None
+
+        if targets is not None:
+            B, T, C = logits.shape
+            logits = rearrange(logits, 'b t c -> (b t) c')
+            targets = rearrange(targets, 'b t -> (b t)')
+            loss = F.cross_entropy(logits, targets)
+
+        return x, loss, kv_cache
 
     def generate(self, idx: str, max_new_tokens: int) -> str:
         """
         generates a sequence of text
         """
         blocks_kvcache = [None] * self.n_layer
+        curr_idx = idx
+        for _ in range(max_new_tokens):
+            logits, loss, blocks_kvcache = self.forward(
+                curr_idx, blocks_kvcache=blocks_kvcache
+            )
+            logits = logits[:, -1, :]
+            probs = F.softmax(logits, dim=-1)
+            next_idx = torch.multinomial(probs, num_samples=1)
+            curr_idx = next_idx
+            idx = torch.cat([idx, next_idx], dim=1)
+        return idx
