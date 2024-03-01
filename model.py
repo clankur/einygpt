@@ -37,33 +37,33 @@ class GptLanguageModel (nn.Module):
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
 
-        self.token_emb_table = torch.ones((self.vocab_size, self.n_embd))
-        self.position_emb_table = torch.ones((self.block_size, self.n_embd))
+        self.token_emb_table = torch.randn((self.vocab_size, self.n_embd))
+        self.position_emb_table = torch.randn((self.block_size, self.n_embd))
 
         # MLP projection matrices
         self.w_in = torch.randn(
             (self.n_embd, 4 * self.n_embd)) / self.n_embd ** 0.5
-        self.w_out = torch.ones(
+        self.w_out = torch.randn(
             (4 * self.n_embd, self.n_embd) / (4 * self.n_embd) ** 0.5)
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
 
         self.attention_k = torch.randn(
-            (self.n_embd, self.n_head, self.head_dim)) ** self.head_dim ** 0.5  # [C, h, d]
-        self.attention_q = torch.ones(
-            (self.n_embd, self.n_head, self.head_dim)) ** self.head_dim ** 0.5
-        self.attention_v = torch.ones(
-            (self.n_embd, self.n_head, self.head_dim)) ** self.head_dim ** 0.5
+            (self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5  # [C, h, d]
+        self.attention_q = torch.randn(
+            (self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5
+        self.attention_v = torch.randn(
+            (self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5
 
         # for communication between attention heads
-        self.out_proj = torch.ones(
-            (self.n_head, self.head_dim, self.n_embd))  # [h, d, C]
+        self.out_proj = torch.randn(
+            (self.n_head, self.head_dim, self.n_embd)) / self.head_dim ** 0.5  # [h, d, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
 
-        self.lm_head = torch.ones((self.n_embd, self.vocab_size))
+        self.lm_head = torch.randn((self.n_embd, self.vocab_size)) / self.n_embd ** 0.5 
 
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[BlocksKVCacheType]]:
         """
