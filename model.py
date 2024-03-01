@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
+from einops import rearrange
 
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
@@ -54,9 +55,12 @@ class GptLanguageModel (nn.Module):
             (self.n_embd, self.n_head, self.head_dim))
 
         # for communication between attention heads
-        self.out_proj = torch.ones((self.n_embd, self.n_head, self.head_dim))
+        self.out_proj = torch.ones((self.n_head, self.head_dim, self.n_embd)) # [h, d, C]
 
-    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.register_buffer('tril', torch.tril(
+            torch.ones(1, 1, self.block_size, self.block_size)))
+
+    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[BlocksKVCacheType]]:
         """
         performs a forward pass of the model
         """
@@ -74,26 +78,42 @@ class GptLanguageModel (nn.Module):
             kv_cache = blocks_kvcache[layer] if blocks_kvcache else None
 
             projections = torch.stack(
-                [self.attention_k, self.attention_v, self.attention_q, self.out_proj], dim=0) # [4, C, h, d]
+                [self.attention_k, self.attention_v, self.attention_q], dim=0)  # [3, C, h, d]
 
-            k, v, q, o = torch.einsum('btc,schd->sbthd', x, projections)
-            # will reduce on c dimension
+            # [B, T, C] @ [3, C, h, d] -> [3, B, h, T, d], S = 3
+            k, v, q = torch.einsum('btc,schd->sbhtd', x, projections)
+            # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
                 if kv_cache:
                     prev_k, prev_v = [cache[:, :, -self.block_size - 1:, :]
                                       for cache in kv_cache]  # truncate the first token
 
-                    # [B, n, K, h] -> [B, n, K+T, h]
+                    # [B, h, K, d] -> [B, h, K+T, d]
                     k, v = [torch.cat([prev_elmnt, elmnt], dim=2)
                             for prev_elmnt, elmnt in [(prev_k, k), (prev_v, v)]]
 
                 blocks_kvcache[layer] = (k, v)
 
-            # need to transpose to [B, n, T, h]
-            k, v, q = [kvq_proj.transpose(1, 2) for kvq_proj in (k, v, q)]
-            att_wei = torch.einsum('bnqh,bnkh->bnqk', q,
+            # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
+
+            att_wei = torch.einsum('bhkd,bhqd->bhqk', q,
                                    k) * (self.head_dim ** -0.5)
+            # casual masking
+            att_wei = att_wei.masked_fill(
+                self.tril[:, :, :T, :T] == 0, float('-inf')
+            )
+
+            att_wei = F.softmax(att_wei, dim=-1)
+            # att_wei = self.dropout(att_wei)
+
+            # [B, h, Q, K] @ [B, h, K, d] -> [B, h, Q, d]
+            out = torch.einsum('bhqk,bhkd->bhqd', att_wei, v)
+
+            # [B, h, Q, d] @ [h, d, C] -> [B, Q, C]
+            out = torch.einsum('bhqd,hdc->bqc', out, self.out_proj)
+            # out = self.dropout(out)
+            return out, kv_cache
 
     def generate(self, idx: str, max_new_tokens: int) -> str:
         """
