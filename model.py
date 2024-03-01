@@ -4,6 +4,7 @@ from torch.nn import functional as F
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from einops import rearrange
+import torch
 
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
@@ -37,34 +38,27 @@ class GptLanguageModel (nn.Module):
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
-
-        self.token_emb_table = torch.randn((self.vocab_size, self.n_embd))
-        self.position_emb_table = torch.randn((self.block_size, self.n_embd))
+        print(hyperparameters)
+        self.token_emb_table = nn.Parameter(torch.randn((self.vocab_size, self.n_embd)))
+        self.position_emb_table = nn.Parameter(torch.randn((self.block_size, self.n_embd)))
 
         # MLP projection matrices
-        self.w_in = torch.randn(
-            (self.n_embd, 4 * self.n_embd)) / self.n_embd ** 0.5
-        self.w_out = torch.randn(
-            (4 * self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5
+        self.w_in = nn.Parameter(torch.randn((self.n_embd, 4 * self.n_embd)) / self.n_embd ** 0.5)
+        self.w_out = nn.Parameter(torch.randn((4 * self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5)
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
 
-        self.attention_k = torch.randn(
-            (self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5  # [C, h, d]
-        self.attention_q = torch.randn(
-            (self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5
-        self.attention_v = torch.randn(
-            (self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5
+        self.attention_k = nn.Parameter(torch.randn((self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5)  # [C, h, d]
+        self.attention_q = nn.Parameter(torch.randn((self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5)
+        self.attention_v = nn.Parameter(torch.randn((self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5)
 
         # for communication between attention heads
-        self.out_proj = torch.randn(
-            (self.n_head, self.head_dim, self.n_embd)) / self.head_dim ** 0.5  # [h, d, C]
+        self.out_proj = nn.Parameter(torch.randn((self.n_head, self.head_dim, self.n_embd)) / self.head_dim ** 0.5)  # [h, d, C]
 
-        self.register_buffer('tril', torch.tril(
-            torch.ones(1, 1, self.block_size, self.block_size)))
+        self.register_buffer('tril', torch.tril(torch.ones(1, 1, self.block_size, self.block_size)))
 
-        self.lm_head = torch.randn((self.n_embd, self.vocab_size)) / self.n_embd ** 0.5 
+        self.lm_head = nn.Parameter(torch.randn((self.n_embd, self.vocab_size)) / self.n_embd ** 0.5)
 
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[BlocksKVCacheType]]:
         """
@@ -76,7 +70,9 @@ class GptLanguageModel (nn.Module):
 
         history_length = 0 if not blocks_kvcache or not blocks_kvcache[
             0] else blocks_kvcache[0][0].shape[2]
-        pos_emb = self.position_emb_table[history_length:history_length + T]
+        print(T, history_length)
+        pos_emb = self.position_emb_table[torch.arange(T, device=self.device) + history_length]
+
 
         x = tok_emb + pos_emb  # [B, T, C]
 

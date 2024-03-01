@@ -2,20 +2,29 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from NanoGPTLangugageModel import NanoGPTLanguageModel, encode, decode, train_data, val_data, block_size, device
+from model import GptLanguageModel, GptConfig
 from clearml import Task
 from datetime import datetime
 import torch
+from typing import Tuple
 
 
-batch_size = 64
-learning_rate = 3e-4
-max_epochs = 5000
-eval_interval = 500
-eval_iters = 200
+hyperparameters = GptConfig(
+    batch_size = 32,
+    block_size = 8,
+    max_epochs = 5000,
+    eval_interval = 500,
+    learning_rate = 1e-3,
+    eval_iters = 200,
+    n_embd = 32,
+    n_layer = 3,
+    n_head = 4,
+    dropout = 0.2
+)
 
-def get_batch(split: str) -> (torch.Tensor, torch.Tensor):
+def get_batch(split: str) -> Tuple[torch.Tensor, torch.Tensor]:
     data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, size=(batch_size,)) # will return batch_size random numbers that are offsets of the data set 
+    ix = torch.randint(len(data) - block_size, size=(hyperparameters.batch_size,)) # will return batch_size random numbers that are offsets of the data set 
     x = torch.stack([data[i:i+block_size] for i in ix]) # builds a stack of tensors of size blocksize for each random number in ix
     y = torch.stack([data[i+1:i+block_size+1] for i in ix]) # offset by 1 stack of tensors
     x, y = x.to(device), y.to(device)
@@ -26,10 +35,10 @@ def estimate_loss(model) -> dict:
     out = {}
     model.eval()
     for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
+        losses = torch.zeros(hyperparameters.eval_iters)
+        for k in range(hyperparameters.eval_iters):
             X, Y = get_batch(split)
-            _, loss = model(X, Y)
+            _, loss, _ = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -45,19 +54,19 @@ if __name__ == "__main__":
 
     # import hydra
 
-    task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
-    task.execute_remotely('default', clone=False, exit_process=True)
+    # task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
+    # task.execute_remotely('default', clone=False, exit_process=True)
 
-    model = NanoGPTLanguageModel()
+    model = GptLanguageModel(hyperparameters)
     m = model.to(device)
 
     # create a pytorch optimizer
-    optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(m.parameters(), lr=model.learning_rate)
 
     # training the model
-    for steps in range(max_epochs):
+    for steps in range(model.max_epochs):
         # every once in a while eval loss on train and val sets
-        if steps % eval_interval == 0:
+        if steps % model.eval_interval == 0:
             losses = estimate_loss(m)
             print(f"Step: {steps}, Train loss: {losses['train']:.2f}, Val loss: {losses['val']:.2f}")   
         # sample a batch of data
@@ -66,7 +75,7 @@ if __name__ == "__main__":
         # evaluate the loss
         logits, loss = m(xb, yb)
 
-        task.set_last_metrics({'loss': loss.item()}, plot_name='loss', series_name='loss')
+        # task.set_last_metrics({'loss': loss.item()}, plot_name='loss', series_name='loss')
 
         optimizer.zero_grad(set_to_none=True) # clear the gradients
         loss.backward() # compute gradients
