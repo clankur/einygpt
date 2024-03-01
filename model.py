@@ -17,6 +17,7 @@ with open("input.txt", "r", encoding="utf-8") as f:
 class GptConfig:
     """hyperparameters for GptLanguageModel"""
 
+    batch_size: int = 64
     block_size: int = 256
     max_epochs: int = 5000
     eval_interval: int = 500
@@ -44,7 +45,7 @@ class GptLanguageModel (nn.Module):
         self.w_in = torch.randn(
             (self.n_embd, 4 * self.n_embd)) / self.n_embd ** 0.5
         self.w_out = torch.randn(
-            (4 * self.n_embd, self.n_embd) / (4 * self.n_embd) ** 0.5)
+            (4 * self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
