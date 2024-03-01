@@ -38,7 +38,6 @@ class GptLanguageModel (nn.Module):
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
-        print(hyperparameters)
         self.token_emb_table = nn.Parameter(torch.randn((self.vocab_size, self.n_embd)))
         self.position_emb_table = nn.Parameter(torch.randn((self.block_size, self.n_embd)))
 
@@ -70,7 +69,6 @@ class GptLanguageModel (nn.Module):
 
         history_length = 0 if not blocks_kvcache or not blocks_kvcache[
             0] else blocks_kvcache[0][0].shape[2]
-        print(T, history_length)
         pos_emb = self.position_emb_table[torch.arange(T, device=self.device) + history_length]
 
 

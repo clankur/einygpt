@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from NanoGPTLangugageModel import NanoGPTLanguageModel, encode, decode, train_data, val_data, block_size, device
+from NanoGPTLangugageModel import NanoGPTLanguageModel, encode, decode, train_data, val_data
 from model import GptLanguageModel, GptConfig
 from clearml import Task
 from datetime import datetime
@@ -9,7 +9,7 @@ import torch
 from typing import Tuple
 
 
-hyperparameters = GptConfig(
+low_power_hyperparameters = GptConfig(
     batch_size = 32,
     block_size = 8,
     max_epochs = 5000,
@@ -21,13 +21,14 @@ hyperparameters = GptConfig(
     n_head = 4,
     dropout = 0.2
 )
+hyperparameters = GptConfig()
 
 def get_batch(split: str) -> Tuple[torch.Tensor, torch.Tensor]:
     data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, size=(hyperparameters.batch_size,)) # will return batch_size random numbers that are offsets of the data set 
-    x = torch.stack([data[i:i+block_size] for i in ix]) # builds a stack of tensors of size blocksize for each random number in ix
-    y = torch.stack([data[i+1:i+block_size+1] for i in ix]) # offset by 1 stack of tensors
-    x, y = x.to(device), y.to(device)
+    ix = torch.randint(len(data) - hyperparameters.block_size, size=(hyperparameters.batch_size,)) # will return batch_size random numbers that are offsets of the data set 
+    x = torch.stack([data[i:i+hyperparameters.block_size] for i in ix]) # builds a stack of tensors of size blocksize for each random number in ix
+    y = torch.stack([data[i+1:i+hyperparameters.block_size+1] for i in ix]) # offset by 1 stack of tensors
+    x, y = x.to(hyperparameters.device), y.to(hyperparameters.device)
     return x, y
 
 @torch.no_grad()
@@ -54,11 +55,11 @@ if __name__ == "__main__":
 
     # import hydra
 
-    # task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
-    # task.execute_remotely('default', clone=False, exit_process=True)
+    task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
+    task.execute_remotely('default', clone=False, exit_process=True)
 
     model = GptLanguageModel(hyperparameters)
-    m = model.to(device)
+    m = model.to(hyperparameters.device)
 
     # create a pytorch optimizer
     optimizer = torch.optim.AdamW(m.parameters(), lr=model.learning_rate)
@@ -73,9 +74,9 @@ if __name__ == "__main__":
         xb, yb = get_batch('train')
 
         # evaluate the loss
-        logits, loss = m(xb, yb)
+        logits, loss, _ = m(xb, yb)
 
-        # task.set_last_metrics({'loss': loss.item()}, plot_name='loss', series_name='loss')
+        task.set_last_metrics({'loss': loss.item()}, plot_name='loss', series_name='loss')
 
         optimizer.zero_grad(set_to_none=True) # clear the gradients
         loss.backward() # compute gradients
@@ -86,5 +87,5 @@ if __name__ == "__main__":
     torch.save(m.state_dict(), 'model_weights.pth')
 
     start_str = "\n"
-    idx = torch.tensor(encode(start_str), dtype=torch.long, device=device).unsqueeze(0)
-    print(decode(m.generate(idx = idx, max_new_tokens=block_size)[0].tolist()))
+    idx = torch.tensor(encode(start_str), dtype=torch.long, device=hyperparameters.device).unsqueeze(0)
+    print(decode(m.generate(idx = idx, max_new_tokens=hyperparameters.block_size)[0].tolist()))
