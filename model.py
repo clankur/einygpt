@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from einops import rearrange, einsum
 from typing import List, Tuple, Optional
-from einops import rearrange
 from common import GptConfig, KVCacheType, BlocksKVCacheType
 
 torch.manual_seed(1337)
@@ -120,7 +120,7 @@ class GptLanguageModel (nn.Module):
             targets = rearrange(targets, 'b t -> (b t)')
             loss = F.cross_entropy(logits, targets)
 
-        return x, loss, kv_cache
+        return logits, loss, kv_cache
 
     def generate(self, idx: str, max_new_tokens: int) -> str:
         """
