@@ -2,9 +2,6 @@ import torch
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-with open("input.txt", "r", encoding="utf-8") as f:
-    text = f.read()
-
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
 
@@ -38,4 +35,4 @@ class GptConfig:
     n_head: int = 6
     n_layer: int = 6
     dropout: float = 0.2
-    vocab_size: int = len(set(text))
+    vocab_size: int = len(chars)
