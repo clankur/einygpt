@@ -6,7 +6,7 @@ from datetime import datetime
 import torch
 from typing import Tuple
 
-from  .common import GptConfig, encode, decode, train_data, val_data
+from  common import GptConfig, encode, decode, train_data, val_data
 from NanoGPTLangugageModel import NanoGPTLanguageModel
 from model import GptLanguageModel
 

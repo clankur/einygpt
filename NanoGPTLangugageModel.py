@@ -79,13 +79,13 @@ class MultiHeadAttention(nn.Module):
 class FeedForward(nn.Module):
     """ simple linear layer followed by a non-linearity and another linear layer"""
 
-    def __init__(self, n_embd) -> None:
+    def __init__(self, hyperparameters: GptConfig, n_embd: int) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(self.dropout)
+            nn.Dropout(hyperparameters.dropout)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -104,12 +104,12 @@ class FeedForward(nn.Module):
 class Block (nn.Module):
     """ a transformer block: intersperses communication with computation"""
 
-    def __init__(self, n_embd: int, n_head: int) -> None:
+    def __init__(self, hyperparameters: GptConfig, n_embd: int, n_head: int) -> None:
         super().__init__()
         head_size = n_embd // n_head
         self.sa_heads = MultiHeadAttention(
-            num_heads=n_head, head_size=head_size)
-        self.ffwd = FeedForward(n_embd)
+            hyperparameters=hyperparameters, num_heads=n_head, head_size=head_size)
+        self.ffwd = FeedForward(hyperparameters=hyperparameters, n_embd=n_embd)
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
@@ -141,7 +141,7 @@ class NanoGPTLanguageModel(nn.Module):
         self.position_embedding_table = nn.Embedding(
             self.block_size, self.n_embd)
         self.blocks = nn.ModuleList(
-            [Block(self.n_embd, self.n_head) for _ in range(self.n_layer)])
+            [Block(hyperparameters, self.n_embd, self.n_head) for _ in range(self.n_layer)])
         self.ln_f = nn.LayerNorm(self.n_embd)
         self.lm_head = nn.Linear(self.n_embd, self.vocab_size)
 
@@ -160,13 +160,14 @@ class NanoGPTLanguageModel(nn.Module):
         B, T = idx.shape
 
         tok_emb = self.token_embedding_table(idx)
-        history_length = 0 if not blocks_kvcache[0] else blocks_kvcache[0][0].shape[2]
+        history_length = 0 if not blocks_kvcache or not blocks_kvcache[0] else blocks_kvcache[0][0].shape[2]
         pos_emb = self.position_embedding_table(
             torch.arange(T, device=self.device) + history_length)
 
         x = tok_emb + pos_emb  # [B, T, C]
         new_kvcaches = []
-        for block, kvcache in zip(self.blocks, blocks_kvcache):
+        for layer, block in enumerate(self.blocks):
+            kvcache = blocks_kvcache[layer] if blocks_kvcache else None
             x, new_cache = block(x, use_cache=use_cache,
                                  kvcache=kvcache)  # [B, T, C]
             new_kvcaches.append(new_cache)
@@ -182,9 +183,8 @@ class NanoGPTLanguageModel(nn.Module):
             targets = targets.view(B*T)
 
             loss = F.cross_entropy(logits, targets)
-        if use_cache:
-            return logits, loss, new_kvcaches
-        return logits, loss
+
+        return logits, loss, new_kvcaches
 
     def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
         """

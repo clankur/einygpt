@@ -3,7 +3,6 @@ import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
 from einops import rearrange
-import torch
 from common import GptConfig, KVCacheType, BlocksKVCacheType
 
 torch.manual_seed(1337)
