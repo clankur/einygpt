@@ -2,59 +2,32 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
-
-KVCacheType = List[Optional[torch.Tensor]]
-
-# hyperparameters
-block_size = 256
-max_epochs = 5000
-eval_interval = 500
-learning_rate = 3e-4
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 200
-n_embd = 384  # every head is = 384 / 6 = 64 dims, C = 64?
-n_head = 6
-n_layer = 6
-dropout = 0.2
-# -----
+from common import GptConfig, KVCacheType, BlocksKVCacheType
 
 torch.manual_seed(1337)
-
-with open("input.txt", "r", encoding="utf-8") as f:
-    text = f.read()
-
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-
-# making a mapping from character to integers and vice versa
-stoi = {ch: i for i, ch in enumerate(chars)}
-itos = {i: ch for i, ch in enumerate(chars)}
-def encode(s): return [stoi[c] for c in s]
-def decode(l): return ''.join([itos[i] for i in l])
-
-data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data, val_data = data[:n], data[n:]
 
 
 class MultiHeadAttention(nn.Module):
     """multiple heads of self attention in parallel"""
 
-    def __init__(self, num_heads: int, head_size: int) -> None:
+    def __init__(self, hyperparameters: GptConfig, num_heads: int, head_size: int) -> None:
         super().__init__()
+        for k, v in hyperparameters.__dict__.items():
+            setattr(self, k, v)
+
         self.num_heads = num_heads
         self.head_size = head_size
 
-        self.key = nn.Linear(n_embd, n_embd, bias=False)
-        self.query = nn.Linear(n_embd, n_embd, bias=False)
-        self.value = nn.Linear(n_embd, n_embd, bias=False)
-        self.proj = nn.Linear(n_embd, n_embd)
-        self.dropout = nn.Dropout(dropout)
+        self.key = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.query = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.value = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.proj = nn.Linear(self.n_embd, self.n_embd)
+        self.dropout = nn.Dropout(self.dropout)
 
         self.register_buffer('tril', torch.tril(
-            torch.ones(1, 1, block_size, block_size)))
+            torch.ones(1, 1, self.block_size, self.block_size)))
 
-    def forward(self, x: torch.Tensor, use_cache: bool, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache: bool, kvcache: Optional[KVCacheType]) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -75,8 +48,8 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             if kvcache:
                 prev_k, prev_v = kvcache
-                prev_k, prev_v = prev_k[:, :, -block_size -
-                                        1:, :], prev_v[:, :, -block_size-1:, :]
+                prev_k, prev_v = prev_k[:, :, -self.block_size -
+                                        1:, :], prev_v[:, :, -self.block_size-1:, :]
                 # [B, n, K, h] -> [B, n, K+T, h]
                 k = torch.cat([prev_k, k], dim=2)
                 v = torch.cat([prev_v, v], dim=2)
@@ -112,7 +85,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(dropout)
+            nn.Dropout(self.dropout)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -140,7 +113,7 @@ class Block (nn.Module):
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
-    def forward(self, x: torch.Tensor, use_cache: bool, kvcache: Optional[Tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, use_cache: bool, kvcache: Optional[BlocksKVCacheType]) -> torch.Tensor:
         """
         performs a forward pass of the model
 
@@ -159,16 +132,20 @@ class Block (nn.Module):
 
 
 class NanoGPTLanguageModel(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, hyperparameters: GptConfig) -> None:
         super().__init__()
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.ModuleList(
-            [Block(n_embd, n_head) for _ in range(n_layer)])
-        self.ln_f = nn.LayerNorm(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size)
+        for k, v in hyperparameters.__dict__.items():
+            setattr(self, k, v)
 
-    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, blocks_kvcache: KVCacheType = [None] * n_layer) -> Tuple[torch.Tensor, torch.Tensor, KVCacheType]:
+        self.token_embedding_table = nn.Embedding(self.vocab_size, self.n_embd)
+        self.position_embedding_table = nn.Embedding(
+            self.block_size, self.n_embd)
+        self.blocks = nn.ModuleList(
+            [Block(self.n_embd, self.n_head) for _ in range(self.n_layer)])
+        self.ln_f = nn.LayerNorm(self.n_embd)
+        self.lm_head = nn.Linear(self.n_embd, self.vocab_size)
+
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[BlocksKVCacheType]]:
         """
         performs a forward pass of the model
 
@@ -185,7 +162,7 @@ class NanoGPTLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx)
         history_length = 0 if not blocks_kvcache[0] else blocks_kvcache[0][0].shape[2]
         pos_emb = self.position_embedding_table(
-            torch.arange(T, device=device) + history_length)
+            torch.arange(T, device=self.device) + history_length)
 
         x = tok_emb + pos_emb  # [B, T, C]
         new_kvcaches = []
@@ -218,7 +195,7 @@ class NanoGPTLanguageModel(nn.Module):
         - max_token_len: the maximum number of tokens to generate
         """
         curr_idx = idx
-        blocks_kvcache = [None] * n_layer
+        blocks_kvcache = [None] * self.n_layer
         for _ in range(max_new_tokens):
             # get the predictions for the next token
             logits, loss, blocks_kvcache = self.forward(

@@ -2,35 +2,11 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
-from dataclasses import dataclass
 from einops import rearrange
 import torch
+from common import GptConfig, KVCacheType, BlocksKVCacheType
 
-KVCacheType = Tuple[torch.Tensor, torch.Tensor]
-BlocksKVCacheType = List[Optional[KVCacheType]]
 torch.manual_seed(1337)
-
-with open("input.txt", "r", encoding="utf-8") as f:
-    text = f.read()
-
-
-@dataclass
-class GptConfig:
-    """hyperparameters for GptLanguageModel"""
-
-    batch_size: int = 64
-    block_size: int = 256
-    max_epochs: int = 5000
-    eval_interval: int = 500
-    learning_rate: float = 3e-4
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    eval_iters: int = 200
-    n_embd: int = 384
-    n_head: int = 6
-    n_layer: int = 6
-    dropout: float = 0.2
-    vocab_size: int = len(set(text))
-
 
 class GptLanguageModel (nn.Module):
 
@@ -58,7 +34,7 @@ class GptLanguageModel (nn.Module):
 
         # for communication between attention heads
         self.out_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_head, self.head_dim, self.n_embd)) / self.head_dim ** 0.5)  # [h, d, C]
+            (self.n_layer, self.n_head, self.head_dim, self.n_embd)) / self.head_dim ** 0.5)  # [L, h, d, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
@@ -121,8 +97,8 @@ class GptLanguageModel (nn.Module):
             out = torch.einsum('bhqd,hdc->bqc', out, mha_out)
             out = F.dropout(out, p=self.dropout, training=self.training)
 
-            out = F.layer_norm(out, [C], weight=layer_scale[1])
             x = x + out
+            x = F.layer_norm(x, [C], weight=layer_scale[1])
 
             # MLP block
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
@@ -136,7 +112,7 @@ class GptLanguageModel (nn.Module):
 
         x = F.layer_norm(x, [C], weight=layer_scale[2])
 
-        logits = torch.einsum('btc,cd->btd', x, self.lm_head)
+        logits = torch.einsum('btc,cv->btv', x, self.lm_head)
         loss = None
 
         if targets is not None:

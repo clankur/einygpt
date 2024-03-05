@@ -1,12 +1,14 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from NanoGPTLangugageModel import NanoGPTLanguageModel, encode, decode, train_data, val_data
-from model import GptLanguageModel, GptConfig
 from clearml import Task
 from datetime import datetime
 import torch
 from typing import Tuple
+
+from  .common import GptConfig, encode, decode, train_data, val_data
+from NanoGPTLangugageModel import NanoGPTLanguageModel
+from model import GptLanguageModel
 
 
 low_power_hyperparameters = GptConfig(
@@ -21,7 +23,9 @@ low_power_hyperparameters = GptConfig(
     n_head=4,
     dropout=0.2
 )
-hyperparameters = GptConfig()
+hyperparameters = GptConfig(
+    max_epochs=1000
+)
 
 
 def get_batch(split: str) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -66,7 +70,7 @@ if __name__ == "__main__":
     task.execute_remotely('default', clone=False, exit_process=True)
     logger = task.get_logger()
 
-    model = GptLanguageModel(hyperparameters)
+    model = NanoGPTLanguageModel(hyperparameters)
     m = model.to(hyperparameters.device)
 
     # create a pytorch optimizer
