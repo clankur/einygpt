@@ -39,7 +39,6 @@ class MultiHeadAttention(nn.Module):
         """
         B, T, C = x.shape
         k, v, q = self.key(x), self.value(x), self.query(x)  # [B, T, C]
-
         # C = n * h where n is the number of heads, h is the head dimension, C is the model dimension
         k, v, q = [t.reshape(B, T, self.num_heads, self.head_size)
                    for t in (k, v, q)]  # [B, T, C] -> [B, T, n, h]
@@ -124,8 +123,10 @@ class Block (nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         # we also perform layer normalization before being fed into the heads and ffwd
+        x = self.ln1(x)
         heads_out, kvcache = self.sa_heads(
-            self.ln1(x), use_cache=use_cache, kvcache=kvcache)
+            x, use_cache=use_cache, kvcache=kvcache)
+
         x = x + heads_out  # residual connection adding to sa heads
         x = x + self.ffwd(self.ln2(x))  # residual connection adding to ffwd
         return x, kvcache

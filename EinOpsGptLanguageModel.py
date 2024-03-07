@@ -7,15 +7,15 @@ from common import GptConfig, KVCacheType, BlocksKVCacheType
 
 torch.manual_seed(1337)
 
-class GptLanguageModel (nn.Module):
+class EinOpsGptLanguageModel (nn.Module):
 
     def __init__(self, hyperparameters: GptConfig) -> None:
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
-        self.token_emb_table = nn.Parameter(
+        self.token_embedding_table = nn.Parameter(
             torch.randn((self.vocab_size, self.n_embd)))
-        self.position_emb_table = nn.Parameter(
+        self.position_embedding_table = nn.Parameter(
             torch.randn((self.block_size, self.n_embd)))
 
         # MLP projection matrices
@@ -41,29 +41,29 @@ class GptLanguageModel (nn.Module):
         self.lm_head = nn.Parameter(torch.randn(
             (self.n_embd, self.vocab_size)) / self.n_embd ** 0.5)
 
-        self.scale = nn.Parameter(torch.randn(self.n_layer, 3, self.n_embd))
+        self.scale = nn.Parameter(torch.ones(self.n_layer, 3, self.n_embd))
 
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[BlocksKVCacheType]]:
         """
         performs a forward pass of the model
         """
 
-        tok_emb = self.token_emb_table[idx]
+        tok_emb = self.token_embedding_table[idx]
         B, T, C = tok_emb.shape
 
         history_length = 0 if not blocks_kvcache or not blocks_kvcache[
             0] else blocks_kvcache[0][0].shape[2]
-        pos_emb = self.position_emb_table[torch.arange(
+        pos_emb = self.position_embedding_table[torch.arange(
             T, device=self.device) + history_length]
 
         x = tok_emb + pos_emb  # [B, T, C]
-
         for layer, (projections, layer_w_in, layer_w_out, mha_out, layer_scale) in enumerate(zip(self.attention_kvq, self.w_in, self.w_out, self.out_proj, self.scale)):
-            x = F.layer_norm(x, [C], weight=layer_scale[0])
+            x = F.layer_norm(x, (C,), weight=layer_scale[0])
             kv_cache = blocks_kvcache[layer] if blocks_kvcache else None
 
             # [B, T, C] @ [3, C, h, d] -> [3, B, h, T, d], S = 3
             k, v, q = torch.einsum('btc,schd->sbhtd', x, projections)
+
             # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
