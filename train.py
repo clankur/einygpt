@@ -10,8 +10,9 @@ from common import GptConfig, encode, decode, train_data, val_data
 from NanoGPTLangugageModel import NanoGPTLanguageModel
 from EinOpsGptLanguageModel import EinOpsGptLanguageModel
 
+remote = True
 
-hyperparameters = GptConfig(
+lp_hyperparameters = GptConfig(
     batch_size=32,
     block_size=8,
     max_epochs=1,
@@ -23,9 +24,8 @@ hyperparameters = GptConfig(
     n_head=4,
     dropout=0.2
 )
-beefy_hyperparameters = GptConfig(
-    max_epochs=1000
-)
+
+hyperparameters = GptConfig()
 
 
 def get_batch(split: str)-> Tuple[torch.Tensor, torch.Tensor]:
@@ -55,33 +55,48 @@ def estimate_loss(model) -> dict:
     model.train()
     return out
 
-def convert_state_dict(gpt_state_dict, nano_state_dict):
+def convert_state_dict(einops_model, nano_model):
+    gpt_state_dict = einops_model.state_dict()
+    nano_state_dict = nano_model.state_dict()
 
+    n_head = hyperparameters.n_head
     # Copy over the parameters that don't need to be transformed
     for param in ['token_embedding_table.weight', 'position_embedding_table.weight', 'lm_head.weight']:
+        field = param.split('.')[0]
         if param == 'lm_head.weight':
-            gpt_state_dict[param] = nano_state_dict[param].T
+            gpt_state_dict[field] = nano_state_dict[param].T
         else:
-            gpt_state_dict[param.split('.')[0]] = nano_state_dict[param]
+            gpt_state_dict[field] = nano_state_dict[param]
 
     # Transform the parameters for the blocks
+    att_kvq = torch.zeros_like(gpt_state_dict['attention_kvq'])
+    out_proj = torch.zeros_like(gpt_state_dict['out_proj'])
+    w_in = torch.zeros_like(gpt_state_dict['w_in'])
+    w_out = torch.zeros_like(gpt_state_dict['w_out'])
 
     for i in range(hyperparameters.n_layer):
         block_prefix = f'blocks.{i}.'
-
-        # Feedforward network weights and biases
-        gpt_state_dict[f'w_in.{i}'] = nano_state_dict[block_prefix + 'ffwd.net.0.weight'].T
-        gpt_state_dict[f'w_out.{i}'] = nano_state_dict[block_prefix + 'ffwd.net.2.weight'].T
-
         # Attention weights
         key_weight = nano_state_dict[block_prefix + 'sa_heads.key.weight'].T
+        
         value_weight = nano_state_dict[block_prefix + 'sa_heads.value.weight'].T
         query_weight = nano_state_dict[block_prefix + 'sa_heads.query.weight'].T
-        att_kvq = rearrange(torch.stack([key_weight, value_weight, query_weight]), "s c e -> s c h d")
-        gpt_state_dict[f'attention_kvq.{i}'] = att_kvq
+        projection = rearrange(torch.stack([key_weight, value_weight, query_weight], dim=0), "s c (h d) -> s c h d", h=n_head)
+        att_kvq[i] = projection
+
+        out_proj_weight = nano_state_dict[block_prefix + 'sa_heads.proj.weight']
+        out_proj[i] = out_proj_weight # rearrange(out_proj_weight, "(h d) c -> h d c", h=hyperparameters.n_head)
+
+        # Feedforward network weights and biases
+        w_in[i] = nano_state_dict[block_prefix + 'ffwd.net.0.weight'].T
+        w_out[i]= nano_state_dict[block_prefix + 'ffwd.net.2.weight'].T
 
         # Projection weights
-        gpt_state_dict[f'out_proj.{i}'] = nano_state_dict[block_prefix + 'sa_heads.proj.weight'].T
+    gpt_state_dict['attention_kvq'] = att_kvq
+    gpt_state_dict['out_proj'] = out_proj
+    gpt_state_dict['w_in'] = w_in
+    gpt_state_dict['w_out'] = w_out
+
     # print(gpt_state_dict)
     return gpt_state_dict
 
@@ -96,16 +111,15 @@ if __name__ == "__main__":
     # import hydra
 
     task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
-    task.execute_remotely('default', clone=False, exit_process=True)
+    if remote:
+        task.execute_remotely('default', clone=False, exit_process=True)
     logger = task.get_logger()
 
     pytorch_model = NanoGPTLanguageModel(hyperparameters)
-
-    einops_model = EinOpsGptLanguageModel(hyperparameters)
-    einops_model.load_state_dict(convert_state_dict(einops_model.state_dict(), pytorch_model.state_dict()))
-
-    m = einops_model.to(hyperparameters.device)
     
+    einops_model = EinOpsGptLanguageModel(hyperparameters)
+    einops_model.load_state_dict(convert_state_dict(einops_model, pytorch_model))
+    m = einops_model.to(hyperparameters.device)
     block_layers = {
         f"blocks.{i}": f"blocks.{i}" for i in range(hyperparameters.n_layer)
     }
@@ -116,6 +130,8 @@ if __name__ == "__main__":
         "lm_head": "lm_head",
         **block_layers
     }
+
+
     # register hook
     # register_hook(m)
 
@@ -131,7 +147,6 @@ if __name__ == "__main__":
         # mid_getter = MidGetter(m, return_layers=return_layers)
         # mid_outputs, model_output = mid_getter(xb, yb)
         logits, loss, _ = m(xb, yb)
-
 
         logger.report_scalar(title="Train Loss", series="Train Loss",
                              value=loss.item(), iteration=steps)

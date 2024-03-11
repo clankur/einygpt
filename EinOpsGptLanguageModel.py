@@ -21,9 +21,9 @@ class EinOpsGptLanguageModel (nn.Module):
         # MLP projection matrices
 
         self.w_in = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_embd, 4 * self.n_embd)) / self.n_embd ** 0.5)
+            (self.n_layer, self.n_embd, 4*self.n_embd)) / self.n_embd ** 0.5)
         self.w_out = nn.Parameter(torch.randn(
-            (self.n_layer, 4 * self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5)
+            (self.n_layer, 4*self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5)
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
@@ -33,7 +33,7 @@ class EinOpsGptLanguageModel (nn.Module):
 
         # for communication between attention heads
         self.out_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_head, self.head_dim, self.n_embd)) / self.head_dim ** 0.5)  # [L, h, d, C]
+            (self.n_layer, self.n_embd, self.n_embd)) / self.head_dim ** 0.5)  # [L, h, d, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
@@ -57,15 +57,14 @@ class EinOpsGptLanguageModel (nn.Module):
             T, device=self.device) + history_length]
 
         x = tok_emb + pos_emb  # [B, T, C]
-        for layer, (projections, layer_w_in, layer_w_out, mha_out, layer_scale) in enumerate(zip(self.attention_kvq, self.w_in, self.w_out, self.out_proj, self.scale)):
+        for layer, (projections, layer_w_in, layer_w_out, mha_proj, layer_scale) in enumerate(zip(self.attention_kvq, self.w_in, self.w_out, self.out_proj, self.scale)):
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
             kv_cache = blocks_kvcache[layer] if blocks_kvcache else None
 
             # [B, T, C] @ [3, C, h, d] -> [3, B, h, T, d], S = 3
             k, v, q = torch.einsum('btc,schd->sbhtd', x, projections)
-
             # will reduce on C dimension
-
+        
             if blocks_kvcache:  # not None if we are using cache
                 if kv_cache:
                     prev_k, prev_v = [cache[:, :, -self.block_size - 1:, :]
@@ -78,22 +77,22 @@ class EinOpsGptLanguageModel (nn.Module):
                 blocks_kvcache[layer] = (k, v)
 
             # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
-            att_wei = torch.einsum('bhkd,bhqd->bhqk', q,
+            att_wei = torch.einsum('bhqd,bhkd->bhqk', q,
                                    k) * (self.head_dim ** -0.5)
             # casual masking
             att_wei = att_wei.masked_fill(
                 self.tril[:, :, :T, :T] == 0, float('-inf')
             )
-
+            
             att_wei = F.softmax(att_wei, dim=-1)
             att_wei = F.dropout(att_wei, p=self.dropout,
                                 training=self.training)
 
             # [B, h, Q, K] @ [B, h, K, d] -> [B, h, Q, d]
             out = torch.einsum('bhqk,bhkd->bhqd', att_wei, v)
-
             # [B, h, Q, d] @ [h, d, C] -> [B, Q, C]
-            out = torch.einsum('bhqd,hdc->bqc', out, mha_out)
+            out = rearrange(out, 'b h q d -> b q (h d)')
+            out = torch.einsum('bqe,ce->bqc', out, mha_proj)
             out = F.dropout(out, p=self.dropout, training=self.training)
 
             x = x + out
@@ -103,14 +102,14 @@ class EinOpsGptLanguageModel (nn.Module):
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
             mlp_hidden = torch.einsum('btc,cd->btd', x, layer_w_in)
             mlp_hidden = F.relu(mlp_hidden)
-
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
             mlp_out = torch.einsum('btd,dc->btc', mlp_hidden, layer_w_out)
-            mlp_out = F.dropout(x, p=self.dropout, training=self.training)
+            mlp_out = F.dropout(mlp_out, p=self.dropout, training=self.training)
+
             x = x + mlp_out  # residual connection
 
         x = F.layer_norm(x, [C], weight=layer_scale[2])
-
+        
         logits = torch.einsum('btc,cv->btv', x, self.lm_head)
         loss = None
 

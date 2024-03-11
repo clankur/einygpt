@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from einops import rearrange, einsum
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
 from common import GptConfig, KVCacheType, BlocksKVCacheType
@@ -21,7 +22,7 @@ class MultiHeadAttention(nn.Module):
         self.key = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.query = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.value = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.proj = nn.Linear(self.n_embd, self.n_embd)
+        self.proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.dropout = nn.Dropout(self.dropout)
 
         self.register_buffer('tril', torch.tril(
@@ -38,12 +39,14 @@ class MultiHeadAttention(nn.Module):
         - out: a [B, T, C] tensor of floats representing the output sequence
         """
         B, T, C = x.shape
+
         k, v, q = self.key(x), self.value(x), self.query(x)  # [B, T, C]
         # C = n * h where n is the number of heads, h is the head dimension, C is the model dimension
         k, v, q = [t.reshape(B, T, self.num_heads, self.head_size)
                    for t in (k, v, q)]  # [B, T, C] -> [B, T, n, h]
         k, v, q = [torch.transpose(x, 1, 2) for x in (
             k, v, q)]  # [B, T, n, h] -> [B, n, T, h]
+
         if use_cache:
             if kvcache:
                 prev_k, prev_v = kvcache
@@ -66,9 +69,7 @@ class MultiHeadAttention(nn.Module):
         att_wei = self.dropout(att_wei)
         # [B, n, Q, K] @ [B, n, K, h] -> [B, n, Q, h]
         out = torch.einsum('bnqk,bnkh->bnqh', att_wei, v)
-
-        out = torch.transpose(out, 1, 2)  # [B, n, Q, h] -> [B, Q, n, h]
-        out = out.reshape(B, T, C)  # [B, T, n, h] -> [B, T, C]
+        out = rearrange(out, 'b n q h -> b q (n h)')
         # what is the purpose of this? allow heads to communicate
         out = self.proj(out)
         out = self.dropout(out)  # apply dropout
@@ -81,9 +82,9 @@ class FeedForward(nn.Module):
     def __init__(self, hyperparameters: GptConfig, n_embd: int) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
+            nn.Linear(n_embd, 4 * n_embd, bias=False),
             nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),
+            nn.Linear(4 * n_embd, n_embd, bias=False),
             nn.Dropout(hyperparameters.dropout)
         )
 
@@ -97,7 +98,9 @@ class FeedForward(nn.Module):
         Returns:
         - a [B, T, C] tensor of floats representing the output sequence
         """
-        return self.net(x)
+        for layer in self.net:
+            x = layer(x)
+        return x
 
 
 class Block (nn.Module):
@@ -144,7 +147,7 @@ class NanoGPTLanguageModel(nn.Module):
         self.blocks = nn.ModuleList(
             [Block(hyperparameters, self.n_embd, self.n_head) for _ in range(self.n_layer)])
         self.ln_f = nn.LayerNorm(self.n_embd)
-        self.lm_head = nn.Linear(self.n_embd, self.vocab_size)
+        self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False)
 
     def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[BlocksKVCacheType]]:
         """
@@ -172,9 +175,11 @@ class NanoGPTLanguageModel(nn.Module):
             x, new_cache = block(x, use_cache=use_cache,
                                  kvcache=kvcache)  # [B, T, C]
             new_kvcaches.append(new_cache)
-        x = self.ln_f(x)  # [B, T, C]
-        logits = self.lm_head(x)
 
+        x = self.ln_f(x)  # [B, T, C]
+
+        logits = self.lm_head(x)
+        
         if targets is None:
             loss = None
         else:
