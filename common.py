@@ -33,6 +33,7 @@ class GptConfig:
     eval_iters: int = 200
     n_embd: int = 384
     n_head: int = 6
+    n_groups: int = 3
     n_layer: int = 6
     dropout: float = 0.2
     vocab_size: int = len(chars)
