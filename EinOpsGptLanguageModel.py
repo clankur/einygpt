@@ -36,7 +36,7 @@ class EinOpsGptLanguageModel (nn.Module):
             (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, num_kv_heads, d]
         # for communication between attention heads
         self.out_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_embd, self.n_embd)) / self.head_dim ** 0.5)  # [L, h, d, C]
+            (self.n_layer, self.n_embd, self.n_embd)) / self.head_dim ** 0.5)  # [L, C, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
@@ -83,8 +83,8 @@ class EinOpsGptLanguageModel (nn.Module):
                 blocks_kvcache[layer] = (k, v)
 
             # shape of k, v are [B, num_kv_heads, K, d] and for q it's [B, g, num_kv_heads, Q, d]
-            # compute qK^T
-            att_wei = einsum('b g num_kv Q d, b num_kv K d -> b g num_kv Q K', q, k) * (self.head_dim ** -0.5)
+            # compute qK^T for logits
+            att_wei = einsum(q, k, 'b g num_kv q d, b num_kv k d -> b g num_kv q k') * (self.head_dim ** -0.5)
 
             # casual masking
             att_wei = att_wei.masked_fill(
@@ -96,13 +96,14 @@ class EinOpsGptLanguageModel (nn.Module):
                                 training=self.training)
 
             # [B, g, num_kv_heads, Q, K] @ [B, num_kv_heads, K, d] -> [B, g, num_kv_heads, Q, d]
-            out = einsum(out, layer_out_proj, 'b g num_kv Q K, b num_kv K d -> b g num_kv Q d')
+            out = einsum(att_wei, v, 'b g num_kv q k, b num_kv k d -> b g num_kv q d')
 
+            # lettings the heads communicate amongst each other
             # [B, g, num_kv_heads, Q, d] -> [B, Q, C]
             out = rearrange(out, 'b g num_kv Q d -> b Q (g num_kv d)')
-
             # [B, Q, C] @ [C, C] -> [B, Q, C]
-            out = einsum(out, layer_w_in, 'b Q C, C1 C2 -> b Q C2')
+            out = einsum(out, layer_out_proj, 'b Q C1, C1 C2 -> b Q C2')
+
             out = F.dropout(out, p=self.dropout, training=self.training)
 
             x = x + out
@@ -111,17 +112,17 @@ class EinOpsGptLanguageModel (nn.Module):
 
             # MLP block
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
-            mlp_hidden = einsum(x, layer_w_in, 'b t c, c 4c -> b t 4c')
+            mlp_hidden = einsum(x, layer_w_in, 'b t c, c upscale_c -> b t upscale_c')
             mlp_hidden = F.relu(mlp_hidden)
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
-            mlp_out = einsum(mlp_hidden, layer_w_out, 'b t 4c, 4c c -> b t c')
+            mlp_out = einsum(mlp_hidden, layer_w_out, 'b t c, c downscale_c -> b t downscale_c')
             mlp_out = F.dropout(mlp_out, p=self.dropout, training=self.training)
 
             x = x + mlp_out  # residual connection
 
         x = F.layer_norm(x, [C], weight=layer_scale[2])
         
-        logits = torch.einsum('btc,cv->btv', x, self.lm_head)
+        logits = einsum(x, self.lm_head, 'b t c, c v -> b t v')
         loss = None
 
         if targets is not None:

@@ -15,10 +15,11 @@ remote = True
 lp_hyperparameters = GptConfig(
     batch_size=32,
     block_size=8,
-    max_epochs=1,
+    max_epochs=5000,
     eval_interval=500,
     learning_rate=1e-3,
     eval_iters=200,
+    n_groups=2,
     n_embd=32,
     n_layer=3,
     n_head=4,
@@ -118,7 +119,7 @@ if __name__ == "__main__":
     pytorch_model = NanoGPTLanguageModel(hyperparameters)
     
     einops_model = EinOpsGptLanguageModel(hyperparameters)
-    einops_model.load_state_dict(convert_state_dict(einops_model, pytorch_model))
+    # einops_model.load_state_dict(convert_state_dict(einops_model, pytorch_model))
     m = einops_model.to(hyperparameters.device)
     block_layers = {
         f"blocks.{i}": f"blocks.{i}" for i in range(hyperparameters.n_layer)
