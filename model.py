@@ -19,9 +19,9 @@ class GptLanguageModel (nn.Module):
             torch.randn((self.block_size, self.n_embd)))
 
         # MLP projection matrices
-        self.w_in = nn.Parameter(torch.randn(
+        self.fc_in = nn.Parameter(torch.randn(
             (self.n_layer, self.n_embd, 4*self.n_embd)) / self.n_embd ** 0.5)
-        self.w_out = nn.Parameter(torch.randn(
+        self.fc_out = nn.Parameter(torch.randn(
             (self.n_layer, 4*self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5)
 
         # projection matrices for attention
@@ -61,14 +61,14 @@ class GptLanguageModel (nn.Module):
             T, device=self.device) + history_length]
 
         x = tok_emb + pos_emb  # [B, T, C]
-        for layer, (layer_kv_proj, layer_q_proj, layer_w_in, layer_w_out, layer_out_proj, layer_scale) in enumerate(zip(self.kv_proj, self.q_proj, self.w_in, self.w_out, self.out_proj, self.scale)):
+        for layer, (w_kv, w_q, w_out_proj, fc1, fc2, layer_scale) in enumerate(zip(self.kv_proj, self.q_proj, self.out_proj, self.fc_in, self.fc_out, self.scale)):
 
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
-            q = einsum(x, layer_q_proj, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
+            q = einsum(x, w_q, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
 
             # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
-            k, v = einsum(x, layer_kv_proj, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
+            k, v = einsum(x, w_kv, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
@@ -102,7 +102,7 @@ class GptLanguageModel (nn.Module):
             # [B, g, num_kv_heads, Q, d] -> [B, Q, C]
             out = rearrange(out, 'b g num_kv Q d -> b Q (g num_kv d)')
             # [B, Q, C] @ [C, C] -> [B, Q, C]
-            out = einsum(out, layer_out_proj, 'b Q C1, C1 C2 -> b Q C2')
+            out = einsum(out, w_out_proj, 'b Q C1, C1 C2 -> b Q C2')
 
             out = F.dropout(out, p=self.dropout, training=self.training)
 
@@ -112,23 +112,17 @@ class GptLanguageModel (nn.Module):
 
             # MLP block
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
-            mlp_hidden = einsum(x, layer_w_in, 'b t c, c upscale_c -> b t upscale_c')
+            mlp_hidden = einsum(x, fc1, 'b t c, c upscale_c -> b t upscale_c')
             mlp_hidden = F.relu(mlp_hidden)
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
-            mlp_out = einsum(mlp_hidden, layer_w_out, 'b t c, c downscale_c -> b t downscale_c')
+            mlp_out = einsum(mlp_hidden, fc2, 'b t c, c downscale_c -> b t downscale_c')
             mlp_out = F.dropout(mlp_out, p=self.dropout, training=self.training)
 
             x = x + mlp_out  # residual connection
 
-<<<<<<< HEAD:model.py
         x = F.layer_norm(x, [C], weight=self.out_scale)
 
         logits = torch.einsum('btc,cv->btv', x, self.lm_head)
-=======
-        x = F.layer_norm(x, [C], weight=layer_scale[2])
-        
-        logits = einsum(x, self.lm_head, 'b t c, c v -> b t v')
->>>>>>> f1c3dc2 (lp hyperparameter model performs as expected but upping the settings seems to be breaking things):EinOpsGptLanguageModel.py
         loss = None
 
         if targets is not None:
