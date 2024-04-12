@@ -7,7 +7,6 @@ from collections import OrderedDict
 from einops import rearrange
 
 from common import GptConfig, encode, decode, train_data, val_data, lp_hyperparameters
-from NanoGPTLangugageModel import NanoGPTLanguageModel
 from model import GptLanguageModel
 
 remote = False 
@@ -42,9 +41,7 @@ if __name__ == "__main__":
     logger = task.get_logger()
 
     
-    pytorch_model = NanoGPTLanguageModel(hyperparameters)
     einops_model = GptLanguageModel(hyperparameters)
-    einops_model.load_state_dict(convert_state_dict(einops_model, pytorch_model))
     
     m = einops_model.to(hyperparameters.device)
     block_layers = {
