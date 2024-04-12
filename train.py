@@ -9,7 +9,7 @@ from einops import rearrange
 from common import GptConfig, encode, decode, train_data, val_data, lp_hyperparameters
 from model import GptLanguageModel
 
-remote = False 
+remote = True
 
 hyperparameters = GptConfig()
 
