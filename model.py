@@ -7,7 +7,7 @@ from common import GptConfig, KVCacheType, BlocksKVCacheType
 
 torch.manual_seed(1337)
 
-class EinOpsGptLanguageModel (nn.Module):
+class GptLanguageModel (nn.Module):
 
     def __init__(self, hyperparameters: GptConfig) -> None:
         super().__init__()
@@ -59,22 +59,21 @@ class EinOpsGptLanguageModel (nn.Module):
         x = tok_emb + pos_emb  # [B, T, C]
         for layer, (projections, layer_w_in, layer_w_out, mha_proj, layer_scale) in enumerate(zip(self.attention_kvq, self.w_in, self.w_out, self.out_proj, self.scale)):
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
-            kv_cache = blocks_kvcache[layer] if blocks_kvcache else None
 
             # [B, T, C] @ [3, C, h, d] -> [3, B, h, T, d], S = 3
             k, v, q = torch.einsum('btc,schd->sbhtd', x, projections)
             # will reduce on C dimension
-        
+
             if blocks_kvcache:  # not None if we are using cache
+                kv_cache = blocks_kvcache[layer]
                 if kv_cache:
-                    prev_k, prev_v = [cache[:, :, -self.block_size - 1:, :]
-                                      for cache in kv_cache]  # truncate the first token
-
+                    prev_k, prev_v = kv_cache
                     # [B, h, K, d] -> [B, h, K+T, d]
-                    k, v = [torch.cat([prev_elmnt, elmnt], dim=2)
-                            for prev_elmnt, elmnt in [(prev_k, k), (prev_v, v)]]
+                    k = torch.cat([prev_k, k], dim=2)
+                    v = torch.cat([prev_v, v], dim=2)
 
-                blocks_kvcache[layer] = (k, v)
+                blocks_kvcache[layer] = [cache[:, :, -self.block_size:, :] # [B, h, K, d]
+                                      for cache in (k, v)]  # truncate to conist of the last block_size tokens
 
             # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
             att_wei = torch.einsum('bhqd,bhkd->bhqk', q,
@@ -119,7 +118,7 @@ class EinOpsGptLanguageModel (nn.Module):
             targets = rearrange(targets, 'b t -> (b t)')
             loss = F.cross_entropy(logits, targets)
 
-        return logits, loss, kv_cache
+        return logits, loss, blocks_kvcache
 
     def generate(self, idx: str, max_new_tokens: int) -> str:
         """
