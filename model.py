@@ -29,11 +29,10 @@ class GptLanguageModel (nn.Module):
         self.num_kv_heads = self.n_head // self.n_groups # h = g * num_kv_heads
         
         self.q_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_embd, self.n_groups, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, C, g, num_kv_heads, d] 
+            (self.n_layer, self.n_embd, self.n_groups, self.num_kv_heads, self.head_dim)) / self.n_embd ** 0.5) # [L, C, g, num_kv_heads, d] 
         
         self.kv_proj =  nn.Parameter(torch.randn(
-            (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, h, d]
-        
+            (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, num_kv_heads, d]
         # for communication between attention heads
         self.out_proj = nn.Parameter(torch.randn(
             (self.n_layer, self.n_embd, self.n_embd)) / (self.head_dim * self.n_head) ** 0.5)  # [L, h, d, C]
