@@ -19,7 +19,6 @@ class GptLanguageModel (nn.Module):
             torch.randn((self.block_size, self.n_embd)))
 
         # MLP projection matrices
-
         self.w_in = nn.Parameter(torch.randn(
             (self.n_layer, self.n_embd, 4*self.n_embd)) / self.n_embd ** 0.5)
         self.w_out = nn.Parameter(torch.randn(
@@ -29,11 +28,11 @@ class GptLanguageModel (nn.Module):
         self.head_dim = self.n_embd // self.n_head
 
         self.attention_kvq = nn.Parameter(torch.randn(
-            (self.n_layer, 3, self.n_embd, self.n_head, self.head_dim)) / self.head_dim ** 0.5)  # [L, 3, C, h, d]
+            (self.n_layer, 3, self.n_embd, self.n_head, self.head_dim)) / self.n_embd ** 0.5)  # [L, 3, C, h, d]
 
-        # for communication between attention heads
+        # mixes the head outputs
         self.out_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_embd, self.n_embd)) / self.head_dim ** 0.5)  # [L, h, d, C]
+            (self.n_layer, self.n_embd, self.n_embd)) / (self.head_dim * self.n_head) ** 0.5)  # [L, h, d, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
@@ -41,7 +40,9 @@ class GptLanguageModel (nn.Module):
         self.lm_head = nn.Parameter(torch.randn(
             (self.n_embd, self.vocab_size)) / self.n_embd ** 0.5)
 
-        self.scale = nn.Parameter(torch.ones(self.n_layer, 3, self.n_embd))
+        self.scale = nn.Parameter(torch.ones(self.n_layer, 2, self.n_embd))
+        
+        self.out_scale = nn.Parameter(torch.ones(self.n_embd))
 
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[BlocksKVCacheType]]:
         """
@@ -72,8 +73,8 @@ class GptLanguageModel (nn.Module):
                     k = torch.cat([prev_k, k], dim=2)
                     v = torch.cat([prev_v, v], dim=2)
 
-                blocks_kvcache[layer] = [cache[:, :, -self.block_size:, :] # [B, h, K, d]
-                                      for cache in (k, v)]  # truncate to conist of the last block_size tokens
+                blocks_kvcache[layer] = [cache[:, :, -self.block_size:, :]  # [B, h, K, d]
+                                         for cache in (k, v)]  # truncate to conist of the last block_size tokens
 
             # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
             att_wei = torch.einsum('bhqd,bhkd->bhqk', q,
@@ -82,7 +83,7 @@ class GptLanguageModel (nn.Module):
             att_wei = att_wei.masked_fill(
                 self.tril[:, :, :T, :T] == 0, float('-inf')
             )
-            
+
             att_wei = F.softmax(att_wei, dim=-1)
             att_wei = F.dropout(att_wei, p=self.dropout,
                                 training=self.training)
@@ -103,12 +104,13 @@ class GptLanguageModel (nn.Module):
             mlp_hidden = F.relu(mlp_hidden)
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
             mlp_out = torch.einsum('btd,dc->btc', mlp_hidden, layer_w_out)
-            mlp_out = F.dropout(mlp_out, p=self.dropout, training=self.training)
+            mlp_out = F.dropout(mlp_out, p=self.dropout,
+                                training=self.training)
 
             x = x + mlp_out  # residual connection
 
-        x = F.layer_norm(x, [C], weight=layer_scale[2])
-        
+        x = F.layer_norm(x, [C], weight=self.out_scale)
+
         logits = torch.einsum('btc,cv->btv', x, self.lm_head)
         loss = None
 
