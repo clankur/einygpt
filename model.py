@@ -26,11 +26,15 @@ class GptLanguageModel (nn.Module):
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
-
-        self.attention_kvq = nn.Parameter(torch.randn(
-            (self.n_layer, 3, self.n_embd, self.n_head, self.head_dim)) / self.n_embd ** 0.5)  # [L, 3, C, h, d]
-
-        # mixes the head outputs
+        self.num_kv_heads = self.n_head // self.n_groups # h = g * num_kv_heads
+        
+        self.q_proj = nn.Parameter(torch.randn(
+            (self.n_layer, self.n_embd, self.n_groups, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, C, g, num_kv_heads, d] 
+        
+        self.kv_proj =  nn.Parameter(torch.randn(
+            (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, h, d]
+        
+        # for communication between attention heads
         self.out_proj = nn.Parameter(torch.randn(
             (self.n_layer, self.n_embd, self.n_embd)) / (self.head_dim * self.n_head) ** 0.5)  # [L, h, d, C]
 
@@ -58,11 +62,14 @@ class GptLanguageModel (nn.Module):
             T, device=self.device) + history_length]
 
         x = tok_emb + pos_emb  # [B, T, C]
-        for layer, (projections, layer_w_in, layer_w_out, mha_proj, layer_scale) in enumerate(zip(self.attention_kvq, self.w_in, self.w_out, self.out_proj, self.scale)):
+        for layer, (layer_kv_proj, layer_q_proj, layer_w_in, layer_w_out, layer_out_proj, layer_scale) in enumerate(zip(self.kv_proj, self.q_proj, self.w_in, self.w_out, self.out_proj, self.scale)):
+
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
-            # [B, T, C] @ [3, C, h, d] -> [3, B, h, T, d], S = 3
-            k, v, q = torch.einsum('btc,schd->sbhtd', x, projections)
+            q = einsum(x, layer_q_proj, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
+
+            # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
+            k, v = einsum(x, layer_kv_proj, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
@@ -76,23 +83,27 @@ class GptLanguageModel (nn.Module):
                 blocks_kvcache[layer] = [cache[:, :, -self.block_size:, :]  # [B, h, K, d]
                                          for cache in (k, v)]  # truncate to conist of the last block_size tokens
 
-            # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
-            att_wei = torch.einsum('bhqd,bhkd->bhqk', q,
-                                   k) * (self.head_dim ** -0.5)
+            # shape of k, v are [B, num_kv_heads, K, d] and for q it's [B, g, num_kv_heads, Q, d]
+            # compute qK^T
+            att_wei = einsum('b g num_kv Q d, b num_kv K d -> b g num_kv Q K', q, k) * (self.head_dim ** -0.5)
+
             # casual masking
             att_wei = att_wei.masked_fill(
                 self.tril[:, :, :T, :T] == 0, float('-inf')
             )
-
-            att_wei = F.softmax(att_wei, dim=-1)
+            
+            att_wei = F.softmax(att_wei, dim=-1) # normalized attention logits
             att_wei = F.dropout(att_wei, p=self.dropout,
                                 training=self.training)
 
-            # [B, h, Q, K] @ [B, h, K, d] -> [B, h, Q, d]
-            out = torch.einsum('bhqk,bhkd->bhqd', att_wei, v)
-            # [B, h, Q, d] @ [h, d, C] -> [B, Q, C]
-            out = rearrange(out, 'b h q d -> b q (h d)')
-            out = torch.einsum('bqe,ce->bqc', out, mha_proj)
+            # [B, g, num_kv_heads, Q, K] @ [B, num_kv_heads, K, d] -> [B, g, num_kv_heads, Q, d]
+            out = einsum(out, layer_out_proj, 'b g num_kv Q K, b num_kv K d -> b g num_kv Q d')
+
+            # [B, g, num_kv_heads, Q, d] -> [B, Q, C]
+            out = rearrange(out, 'b g num_kv Q d -> b Q (g num_kv d)')
+
+            # [B, Q, C] @ [C, C] -> [B, Q, C]
+            out = einsum(out, layer_w_in, 'b Q C, C1 C2 -> b Q C2')
             out = F.dropout(out, p=self.dropout, training=self.training)
 
             x = x + out
