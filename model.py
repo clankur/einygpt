@@ -33,7 +33,8 @@ class GptLanguageModel (nn.Module):
         
         self.kv_proj =  nn.Parameter(torch.randn(
             (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, num_kv_heads, d]
-        # for communication between attention heads
+        
+        # mixes the head outputs 
         self.out_proj = nn.Parameter(torch.randn(
             (self.n_layer, self.n_embd, self.n_embd)) / self.head_dim ** 0.5)  # [L, C, C]
 
@@ -121,8 +122,8 @@ class GptLanguageModel (nn.Module):
             x = x + mlp_out  # residual connection
 
         x = F.layer_norm(x, [C], weight=self.out_scale)
-
-        logits = torch.einsum('btc,cv->btv', x, self.lm_head)
+        
+        logits = einsum(x, self.lm_head, 'b t c, c v -> b t v')
         loss = None
 
         if targets is not None:
