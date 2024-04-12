@@ -7,7 +7,7 @@ from common import GptConfig, KVCacheType, BlocksKVCacheType
 
 torch.manual_seed(1337)
 
-class EinOpsGptLanguageModel (nn.Module):
+class GptLanguageModel (nn.Module):
 
     def __init__(self, hyperparameters: GptConfig) -> None:
         super().__init__()
@@ -129,11 +129,11 @@ class EinOpsGptLanguageModel (nn.Module):
         curr_idx = idx
         for _ in range(max_new_tokens):
             logits, loss, blocks_kvcache = self.forward(
-                curr_idx, blocks_kvcache=blocks_kvcache
+                idx, blocks_kvcache=None
             )
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
             next_idx = torch.multinomial(probs, num_samples=1)
-            curr_idx = next_idx
+            # curr_idx = next_idx
             idx = torch.cat([idx, next_idx], dim=1)
         return idx

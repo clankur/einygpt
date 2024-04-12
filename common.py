@@ -27,12 +27,21 @@ class GptConfig:
     batch_size: int = 64
     block_size: int = 256
     max_epochs: int = 5000
-    eval_interval: int = 500
     learning_rate: float = 3e-4
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    eval_iters: int = 200
     n_embd: int = 384
     n_head: int = 6
     n_layer: int = 6
     dropout: float = 0.2
     vocab_size: int = len(chars)
+
+lp_hyperparameters = GptConfig(
+    batch_size=32,
+    block_size=8,
+    max_epochs=5000,
+    learning_rate=1e-3,
+    n_embd=32,
+    n_layer=3,
+    n_head=4,
+    dropout=0.2
+)
