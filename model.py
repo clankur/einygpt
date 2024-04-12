@@ -108,15 +108,15 @@ class GptLanguageModel (nn.Module):
 
             x = x + out
             x = F.layer_norm(x, [C], weight=layer_scale[1])
+            # switching back to referencing Q as T, so out = [B, T, C]
 
             # MLP block
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
-            mlp_hidden = torch.einsum('btc,cd->btd', x, layer_w_in)
+            mlp_hidden = einsum(x, layer_w_in, 'b t c, c 4c -> b t 4c')
             mlp_hidden = F.relu(mlp_hidden)
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
-            mlp_out = torch.einsum('btd,dc->btc', mlp_hidden, layer_w_out)
-            mlp_out = F.dropout(mlp_out, p=self.dropout,
-                                training=self.training)
+            mlp_out = einsum(mlp_hidden, layer_w_out, 'b t 4c, 4c c -> b t c')
+            mlp_out = F.dropout(mlp_out, p=self.dropout, training=self.training)
 
             x = x + mlp_out  # residual connection
 
