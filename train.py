@@ -10,7 +10,7 @@ from common import GptConfig, encode, decode, train_data, val_data, lp_hyperpara
 from NanoGPTLangugageModel import NanoGPTLanguageModel
 from model import GptLanguageModel
 
-remote = True 
+remote = False 
 
 hyperparameters = GptConfig()
 
