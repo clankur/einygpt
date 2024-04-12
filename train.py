@@ -26,51 +26,6 @@ def get_batch(split: str)-> Tuple[torch.Tensor, torch.Tensor]:
     x, y = x.to(hyperparameters.device), y.to(hyperparameters.device)
     return x, y
 
-def convert_state_dict(einops_model, nano_model):
-    gpt_state_dict = einops_model.state_dict()
-    nano_state_dict = nano_model.state_dict()
-
-    n_head = hyperparameters.n_head
-    # Copy over the parameters that don't need to be transformed
-    for param in ['token_embedding_table.weight', 'position_embedding_table.weight', 'lm_head.weight']:
-        field = param.split('.')[0]
-        if param == 'lm_head.weight':
-            gpt_state_dict[field] = nano_state_dict[param].T
-        else:
-            gpt_state_dict[field] = nano_state_dict[param]
-
-    # Transform the parameters for the blocks
-    att_kvq = torch.zeros_like(gpt_state_dict['attention_kvq'])
-    out_proj = torch.zeros_like(gpt_state_dict['out_proj'])
-    w_in = torch.zeros_like(gpt_state_dict['w_in'])
-    w_out = torch.zeros_like(gpt_state_dict['w_out'])
-
-    for i in range(hyperparameters.n_layer):
-        block_prefix = f'blocks.{i}.'
-        # Attention weights
-        key_weight = nano_state_dict[block_prefix + 'sa_heads.key.weight'].T
-
-        value_weight = nano_state_dict[block_prefix + 'sa_heads.value.weight'].T
-        query_weight = nano_state_dict[block_prefix + 'sa_heads.query.weight'].T
-        projection = rearrange(torch.stack([key_weight, value_weight, query_weight], dim=0), "s c (h d) -> s c h d", h=n_head)
-        att_kvq[i] = projection
-
-        out_proj_weight = nano_state_dict[block_prefix + 'sa_heads.proj.weight']
-        out_proj[i] = out_proj_weight # rearrange(out_proj_weight, "(h d) c -> h d c", h=hyperparameters.n_head)
-
-        # Feedforward network weights and biases
-        w_in[i] = nano_state_dict[block_prefix + 'ffwd.net.0.weight'].T
-        w_out[i]= nano_state_dict[block_prefix + 'ffwd.net.2.weight'].T
-
-        # Projection weights
-    gpt_state_dict['attention_kvq'] = att_kvq
-    gpt_state_dict['out_proj'] = out_proj
-    gpt_state_dict['w_in'] = w_in
-    gpt_state_dict['w_out'] = w_out
-
-    # print(gpt_state_dict)
-    return gpt_state_dict
-
 if __name__ == "__main__":
 
     # Get the current date and time
