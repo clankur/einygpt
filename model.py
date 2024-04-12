@@ -67,14 +67,13 @@ class GptLanguageModel (nn.Module):
         
             if blocks_kvcache:  # not None if we are using cache
                 if kv_cache:
-                    prev_k, prev_v = [cache[:, :, -self.block_size - 1:, :]
-                                      for cache in kv_cache]  # truncate the first token
-
+                    prev_k, prev_v = kv_cache
                     # [B, h, K, d] -> [B, h, K+T, d]
                     k, v = [torch.cat([prev_elmnt, elmnt], dim=2)
                             for prev_elmnt, elmnt in [(prev_k, k), (prev_v, v)]]
 
-                blocks_kvcache[layer] = (k, v)
+                blocks_kvcache[layer] = [cache[:, :, -self.block_size:, :] # [B, h, K, d]
+                                      for cache in (k, v)]  # truncate to conist of the last block_size tokens
 
             # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
             att_wei = torch.einsum('bhqd,bhkd->bhqk', q,
@@ -129,11 +128,11 @@ class GptLanguageModel (nn.Module):
         curr_idx = idx
         for _ in range(max_new_tokens):
             logits, loss, blocks_kvcache = self.forward(
-                idx, blocks_kvcache=None
+                curr_idx, blocks_kvcache=blocks_kvcache
             )
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
             next_idx = torch.multinomial(probs, num_samples=1)
-            # curr_idx = next_idx
+            curr_idx = next_idx
             idx = torch.cat([idx, next_idx], dim=1)
         return idx
