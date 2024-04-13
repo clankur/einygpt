@@ -19,20 +19,24 @@ class GptLanguageModel (nn.Module):
             torch.randn((self.block_size, self.n_embd)))
 
         # MLP projection matrices
-        self.w_in = nn.Parameter(torch.randn(
+        self.fc_in = nn.Parameter(torch.randn(
             (self.n_layer, self.n_embd, 4*self.n_embd)) / self.n_embd ** 0.5)
-        self.w_out = nn.Parameter(torch.randn(
+        self.fc_out = nn.Parameter(torch.randn(
             (self.n_layer, 4*self.n_embd, self.n_embd)) / (4 * self.n_embd) ** 0.5)
 
         # projection matrices for attention
         self.head_dim = self.n_embd // self.n_head
-
-        self.attention_kvq = nn.Parameter(torch.randn(
-            (self.n_layer, 3, self.n_embd, self.n_head, self.head_dim)) / self.n_embd ** 0.5)  # [L, 3, C, h, d]
-
-        # mixes the head outputs
+        self.num_kv_heads = self.n_head // self.n_groups # h = g * num_kv_heads
+        
+        self.q_proj = nn.Parameter(torch.randn(
+            (self.n_layer, self.n_embd, self.n_groups, self.num_kv_heads, self.head_dim)) / self.n_embd ** 0.5) # [L, C, g, num_kv_heads, d] 
+        
+        self.kv_proj =  nn.Parameter(torch.randn(
+            (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, num_kv_heads, d]
+        
+        # mixes the head outputs 
         self.out_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_embd, self.n_embd)) / (self.head_dim * self.n_head) ** 0.5)  # [L, h, d, C]
+            (self.n_layer, self.n_embd, self.n_embd)) / (self.head_dim * self.n_head) ** 0.5)  # [L, C, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
@@ -58,11 +62,14 @@ class GptLanguageModel (nn.Module):
             T, device=self.device) + history_length]
 
         x = tok_emb + pos_emb  # [B, T, C]
-        for layer, (projections, layer_w_in, layer_w_out, mha_proj, layer_scale) in enumerate(zip(self.attention_kvq, self.w_in, self.w_out, self.out_proj, self.scale)):
+        for layer, (w_kv, w_q, w_out_proj, fc1, fc2, layer_scale) in enumerate(zip(self.kv_proj, self.q_proj, self.out_proj, self.fc_in, self.fc_out, self.scale)):
+
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
-            # [B, T, C] @ [3, C, h, d] -> [3, B, h, T, d], S = 3
-            k, v, q = torch.einsum('btc,schd->sbhtd', x, projections)
+            q = einsum(x, w_q, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
+
+            # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
+            k, v = einsum(x, w_kv, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
@@ -76,42 +83,47 @@ class GptLanguageModel (nn.Module):
                 blocks_kvcache[layer] = [cache[:, :, -self.block_size:, :]  # [B, h, K, d]
                                          for cache in (k, v)]  # truncate to conist of the last block_size tokens
 
-            # shape of k, v are [B, h, K, d] and for q it's [B, h, Q, d]
-            att_wei = torch.einsum('bhqd,bhkd->bhqk', q,
-                                   k) * (self.head_dim ** -0.5)
+            # shape of k, v are [B, num_kv_heads, K, d] and for q it's [B, g, num_kv_heads, Q, d]
+            # compute qK^T for logits
+            att_wei = einsum(q, k, 'b g num_kv q d, b num_kv k d -> b g num_kv q k') * (self.head_dim ** -0.5)
+
             # casual masking
             att_wei = att_wei.masked_fill(
                 self.tril[:, :, :T, :T] == 0, float('-inf')
             )
-
-            att_wei = F.softmax(att_wei, dim=-1)
+            
+            att_wei = F.softmax(att_wei, dim=-1) # normalized attention logits
             att_wei = F.dropout(att_wei, p=self.dropout,
                                 training=self.training)
 
-            # [B, h, Q, K] @ [B, h, K, d] -> [B, h, Q, d]
-            out = torch.einsum('bhqk,bhkd->bhqd', att_wei, v)
-            # [B, h, Q, d] @ [h, d, C] -> [B, Q, C]
-            out = rearrange(out, 'b h q d -> b q (h d)')
-            out = torch.einsum('bqe,ce->bqc', out, mha_proj)
+            # [B, g, num_kv_heads, Q, K] @ [B, num_kv_heads, K, d] -> [B, g, num_kv_heads, Q, d]
+            out = einsum(att_wei, v, 'b g num_kv q k, b num_kv k d -> b g num_kv q d')
+
+            # mixing the heads outputs amongst each other
+            # [B, g, num_kv_heads, Q, d] -> [B, Q, C]
+            out = rearrange(out, 'b g num_kv Q d -> b Q (g num_kv d)')
+            # [B, Q, C] @ [C, C] -> [B, Q, C]
+            out = einsum(out, w_out_proj, 'b Q C1, C1 C2 -> b Q C2')
+
             out = F.dropout(out, p=self.dropout, training=self.training)
 
             x = x + out
             x = F.layer_norm(x, [C], weight=layer_scale[1])
+            # switching back to referencing Q as T, so out = [B, T, C]
 
             # MLP block
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
-            mlp_hidden = torch.einsum('btc,cd->btd', x, layer_w_in)
+            mlp_hidden = einsum(x, fc1, 'b t c, c upscale_c -> b t upscale_c')
             mlp_hidden = F.relu(mlp_hidden)
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
-            mlp_out = torch.einsum('btd,dc->btc', mlp_hidden, layer_w_out)
-            mlp_out = F.dropout(mlp_out, p=self.dropout,
-                                training=self.training)
+            mlp_out = einsum(mlp_hidden, fc2, 'b t c, c downscale_c -> b t downscale_c')
+            mlp_out = F.dropout(mlp_out, p=self.dropout, training=self.training)
 
             x = x + mlp_out  # residual connection
 
         x = F.layer_norm(x, [C], weight=self.out_scale)
-
-        logits = torch.einsum('btc,cv->btv', x, self.lm_head)
+        
+        logits = einsum(x, self.lm_head, 'b t c, c v -> b t v')
         loss = None
 
         if targets is not None:
