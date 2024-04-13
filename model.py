@@ -36,7 +36,7 @@ class GptLanguageModel (nn.Module):
         
         # mixes the head outputs 
         self.out_proj = nn.Parameter(torch.randn(
-            (self.n_layer, self.n_embd, self.n_embd)) / self.head_dim ** 0.5)  # [L, C, C]
+            (self.n_layer, self.n_embd, self.n_embd)) / (self.head_dim * self.n_head) ** 0.5)  # [L, C, C]
 
         self.register_buffer('tril', torch.tril(
             torch.ones(1, 1, self.block_size, self.block_size)))
