@@ -99,7 +99,7 @@ class GptLanguageModel (nn.Module):
             # [B, g, num_kv_heads, Q, K] @ [B, num_kv_heads, K, d] -> [B, g, num_kv_heads, Q, d]
             out = einsum(att_wei, v, 'b g num_kv q k, b num_kv k d -> b g num_kv q d')
 
-            # lettings the heads communicate amongst each other
+            # mixing the heads outputs amongst each other
             # [B, g, num_kv_heads, Q, d] -> [B, Q, C]
             out = rearrange(out, 'b g num_kv Q d -> b Q (g num_kv d)')
             # [B, Q, C] @ [C, C] -> [B, Q, C]
