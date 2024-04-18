@@ -66,10 +66,10 @@ class GptLanguageModel (nn.Module):
 
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
-            q = einsum(x, w_q, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
+            q = einsum(x, w_q, 'b t c, c g kv_head d -> b g kv_head t d') # [B, g, num_kv_heads, T, d]
 
             # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
-            k, v = einsum(x, w_kv, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
+            k, v = einsum(x, w_kv, 'b t c, s c kv_head d -> s b kv_head t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
@@ -85,7 +85,7 @@ class GptLanguageModel (nn.Module):
 
             # shape of k, v are [B, num_kv_heads, K, d] and for q it's [B, g, num_kv_heads, Q, d]
             # compute qK^T for logits
-            att_wei = einsum(q, k, 'b g num_kv q d, b num_kv k d -> b g num_kv q k') * (self.head_dim ** -0.5)
+            att_wei = einsum(q, k, 'b g kv_head q d, b kv_head k d -> b g kv_head q k') * (self.head_dim ** -0.5)
 
             # casual masking
             att_wei = att_wei.masked_fill(
@@ -97,11 +97,11 @@ class GptLanguageModel (nn.Module):
                                 training=self.training)
 
             # [B, g, num_kv_heads, Q, K] @ [B, num_kv_heads, K, d] -> [B, g, num_kv_heads, Q, d]
-            out = einsum(att_wei, v, 'b g num_kv q k, b num_kv k d -> b g num_kv q d')
+            out = einsum(att_wei, v, 'b g kv_head q k, b kv_head k d -> b g kv_head q d')
 
             # mixing the heads outputs amongst each other
             # [B, g, num_kv_heads, Q, d] -> [B, Q, C]
-            out = rearrange(out, 'b g num_kv Q d -> b Q (g num_kv d)')
+            out = rearrange(out, 'b g kv_head Q d -> b Q (g kv_head d)')
             # [B, Q, C] @ [C, C] -> [B, Q, C]
             out = einsum(out, w_out_proj, 'b Q C1, C1 C2 -> b Q C2')
 
