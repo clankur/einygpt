@@ -1,24 +1,20 @@
 import torch
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
-
+from datasets import load_dataset
+from transformers import LlamaTokenizer
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
 
-with open("input.txt", "r", encoding="utf-8") as f:
-    text = f.read()
 
-chars = sorted(list(set(text)))
+tokenizer = LlamaTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+dataset = load_dataset("roneneldan/TinyStories")
 
 # making a mapping from character to integers and vice versa
-stoi = {ch: i for i, ch in enumerate(chars)}
-itos = {i: ch for i, ch in enumerate(chars)}
-def encode(s): return [stoi[c] for c in s]
-def decode(l): return ''.join([itos[i] for i in l])
+def encode(s): return tokenizer.encode(s).ids
+def decode(l): return tokenizer.decode(l)
 
-data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data, val_data = data[:n], data[n:]
+train_data, val_data = dataset['train'], dataset['validation']
 
 @dataclass
 class GptConfig:
@@ -34,7 +30,7 @@ class GptConfig:
     n_groups: int = 3
     n_layer: int = 6
     dropout: float = 0.2
-    vocab_size: int = len(chars)
+    vocab_size: int = tokenizer.vocab_size
 
 lp_hyperparameters = GptConfig(
     batch_size=32,
