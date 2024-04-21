@@ -6,13 +6,11 @@ from transformers import LlamaTokenizer
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
 
-
 tokenizer = LlamaTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
 dataset = load_dataset("roneneldan/TinyStories")
 
-# making a mapping from character to integers and vice versa
-def encode(s): return tokenizer.encode(s).ids
-def decode(l): return tokenizer.decode(l)
+encode = tokenizer.encode
+decode = tokenizer.decode
 
 train_data, val_data = dataset['train'], dataset['validation']
 
