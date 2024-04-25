@@ -6,24 +6,12 @@ from typing import Tuple, List, Dict
 from collections import OrderedDict
 from einops import rearrange
 
-from common import GptConfig, encode, decode, train_data, val_data, lp_hyperparameters
+from common import GptConfig, encode, decode, get_batch, train_data, val_data, lp_hyperparameters
 from model import GptLanguageModel
 
 remote = True
 
 hyperparameters = GptConfig()
-
-def get_batch(split: str)-> Tuple[torch.Tensor, torch.Tensor]:
-    data = train_data if split == 'train' else val_data
-    # will return batch_size random numbers that are offsets of the data set
-    ix = torch.randint(len(data) - hyperparameters.block_size,
-                       size=(hyperparameters.batch_size,))
-    # builds a stack of tensors of size blocksize for each random number in ix
-    x = torch.stack([data[i:i+hyperparameters.block_size] for i in ix])
-    y = torch.stack([data[i+1:i+hyperparameters.block_size+1]
-                    for i in ix])  # offset by 1 stack of tensors
-    x, y = x.to(hyperparameters.device), y.to(hyperparameters.device)
-    return x, y
 
 if __name__ == "__main__":
 

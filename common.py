@@ -1,6 +1,6 @@
 import torch
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Dict, Tuple, Optional
 from datasets import load_dataset
 from transformers import LlamaTokenizer
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
@@ -12,7 +12,31 @@ dataset = load_dataset("roneneldan/TinyStories")
 encode = tokenizer.encode
 decode = tokenizer.decode
 
-train_data, val_data = dataset['train'], dataset['validation']
+def tokenize_function(examples: Dict[str, str]) -> Dict[str, torch.Tensor]:
+    """
+    Tokenizes text examples.
+
+    Args:
+        examples (Dict[str, str]): A dictionary containing text examples.
+
+    Returns:
+        Dict[str, torch.Tensor]: A dictionary with tokenized tensors for input_ids, etc.
+    """
+    return tokenizer(examples["text"], truncation=True, padding="max_length")
+
+train_data = dataset["train"].map(tokenize_function, batched=True)
+val_data = dataset["validation"].map(tokenize_function, batched=True)
+
+def get_batch(split: str, block_size:int, batch_size:int, device:str="cpu")-> Tuple[torch.Tensor, torch.Tensor]:
+    data = train_data if split == "train" else val_data
+    # will return batch_size random numbers that are offsets of the data set
+    ix = torch.randint(len(data) - block_size,
+                       size=(batch_size,))
+    # builds a stack of tensors of size blocksize for each random number in ix
+    x = data["input_ids"][ix]
+    y = data["input_ids"][ix + 1] # Shift by 1 for target prediction
+    x, y = x.to(device), y.to(device)
+    return x, y
 
 @dataclass
 class GptConfig:
