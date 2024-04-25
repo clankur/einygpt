@@ -31,18 +31,7 @@ if __name__ == "__main__":
     
     einops_model = GptLanguageModel(hyperparameters)
     
-    m = einops_model.to(hyperparameters.device)
-    block_layers = {
-        f"blocks.{i}": f"blocks.{i}" for i in range(hyperparameters.n_layer)
-    }
-
-    return_layers = {
-        "token_embedding_table": "token_embedding_table",
-        "position_embedding_table": "position_embedding_table",
-        "lm_head": "lm_head",
-        **block_layers
-    }
-
+    m = einops_model.to(einops_model.device)
 
     # register hook
     # register_hook(m)
@@ -53,11 +42,9 @@ if __name__ == "__main__":
     # training the model
     for steps in range(m.max_epochs):
         # sample a batch of data
-        xb, yb = get_batch('train')
+        xb, yb = get_batch('train', m.block_size, m.batch_size, m.device)
 
         # evaluate the loss
-        # mid_getter = MidGetter(m, return_layers=return_layers)
-        # mid_outputs, model_output = mid_getter(xb, yb)
         logits, loss, _ = m(xb, yb)
 
         logger.report_scalar(title="Train Loss", series="Train Loss",
