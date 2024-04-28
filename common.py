@@ -1,49 +1,27 @@
 import torch
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from typing import Iterator, List, Dict, Tuple, Optional
+import itertools
+from types import SimpleNamespace
 from datasets import load_dataset
-from transformers import LlamaTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
+from torch.utils.data import Dataset, DataLoader
+
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
 
-tokenizer = LlamaTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
-dataset = load_dataset("roneneldan/TinyStories")
+tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+dataset = load_dataset("roneneldan/TinyStories", streaming=True)
 
 encode = tokenizer.encode
 decode = tokenizer.decode
-
-def tokenize_function(examples: Dict[str, str]) -> Dict[str, torch.Tensor]:
-    """
-    Tokenizes text examples.
-
-    Args:
-        examples (Dict[str, str]): A dictionary containing text examples.
-
-    Returns:
-        Dict[str, torch.Tensor]: A dictionary with tokenized tensors for input_ids, etc.
-    """
-    return tokenizer(examples["text"], truncation=True, padding="max_length")
-
-train_data = dataset["train"].map(tokenize_function, batched=True)
-val_data = dataset["validation"].map(tokenize_function, batched=True)
-
-def get_batch(split: str, block_size:int, batch_size:int, device:str="cpu")-> Tuple[torch.Tensor, torch.Tensor]:
-    data = train_data if split == "train" else val_data
-    # will return batch_size random numbers that are offsets of the data set
-    ix = torch.randint(len(data) - block_size,
-                       size=(batch_size,))
-    # builds a stack of tensors of size blocksize for each random number in ix
-    x = data["input_ids"][ix]
-    y = data["input_ids"][ix + 1] # Shift by 1 for target prediction
-    x, y = x.to(device), y.to(device)
-    return x, y
 
 @dataclass
 class GptConfig:
     """hyperparameters for GptLanguageModel"""
 
     batch_size: int = 64
-    block_size: int = 256
+    block_size: int = 128
     max_epochs: int = 5000
     learning_rate: float = 3e-4
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -53,14 +31,118 @@ class GptConfig:
     n_layer: int = 6
     dropout: float = 0.2
     vocab_size: int = tokenizer.vocab_size
+    seed: int = 42
 
-lp_hyperparameters = GptConfig(
-    batch_size=32,
-    block_size=8,
-    max_epochs=5000,
-    learning_rate=1e-3,
-    n_embd=32,
-    n_layer=3,
-    n_head=4,
-    dropout=0.2
-)
+hyperparameters = GptConfig()
+
+class Collator:
+    def __init__ (self, tokenizer: PreTrainedTokenizer):
+        self.tokenizer = tokenizer
+
+    def __call__(self, examples: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        batch = self.tokenizer.pad(examples, return_attention_mask=False, return_tensors='pt')
+        return {
+            "inputs": batch['input_ids'][:, :-1],
+            "targets": batch['input_ids'][:, 1:]
+        }
+    
+def package_data(dataset: Dataset, tokenizer: PreTrainedTokenizer, config: GptConfig):
+    """
+    Tokenize the dataset and package it into chunks of block_size
+    dataset: dataset to be tokenized
+    tokenizer: tokenizer to be applied
+    config: hyperparameters for model
+    """
+
+    def tokenize(examples: Dict[str, str]) -> PreTrainedTokenizer:
+        return tokenizer(
+            examples['text'],
+            padding=False, # we will pad with the next sequence
+            truncation=False, 
+            max_length=None, 
+            add_special_tokens=False,
+            return_token_type_ids=False, # ?
+            return_attention_mask=False,
+        )
+    
+    def prep_example (examples: List[Dict[str, torch.Tensor]]) -> Iterator[torch.Tensor]:
+        for example in examples:
+            yield tokenizer.bos_token_id
+            yield from example
+    
+    def new_chunk() -> SimpleNamespace:
+        """
+        Create a chunk - a SimpleNamespace with the following attributes:
+            ids: token ids of the chunk
+            positions: position embeddings of the chunk
+            sequences: all sequences of the chunk storing the idx of each sequence
+            sequence_idx: current sequence idx
+            position: current position
+        """
+
+        return SimpleNamespace(
+            ids = [], 
+            positions = [], 
+            sequences=[], 
+            sequence_idx=0, 
+            position=0
+        )
+
+    def chunk(examples: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        Package the tokenized examples into chunks of block_size adding the position and sequence embeddings
+        and changing the input_ids to a list of lists each containing block_size tokens
+        """
+
+        chunk = new_chunk()
+        chunk_len = config.block_size
+        global_ids = []
+        global_positions = []
+        global_sequences = []
+
+        for token_id in prep_example(examples['input_ids']):
+            if token_id == tokenizer.bos_token_id:
+                chunk.sequence_idx += 1
+                chunk.position = 0
+            chunk.ids.append(token_id)
+            chunk.positions.append(chunk.position)
+            chunk.sequences.append(chunk.sequence_idx) 
+            chunk.position += 1
+
+            if len(chunk.ids) == chunk_len:
+                global_ids.append(chunk.ids)
+                global_positions.append(chunk.positions)
+                global_sequences.append(chunk.sequences)
+                chunk = new_chunk()
+        
+        if not global_ids: # we didn't package any chunks
+            return []
+        
+        examples['input_ids'] = global_ids
+        examples['position'] = global_positions
+        examples['sequences'] = global_sequences
+
+        return examples
+
+
+    return dataset.map(tokenize, 
+                       batched=True, 
+                       batch_size=config.batch_size
+    ).map(chunk, batched=True, batch_size=config.batch_size)
+
+def get_iterator(config: GptConfig, dataset: Dataset, tokenizer: PreTrainedTokenizer) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    batch_size = config.batch_size
+    og_dataset = dataset.shuffle(config.seed)
+    for epoch in itertools.count():
+        rdm_dataset = og_dataset.shuffle(config.seed + epoch)
+        rdm_dataset = package_data(rdm_dataset, tokenizer, config)
+        dataloader = iter(DataLoader(rdm_dataset, batch_size=batch_size, collate_fn=Collator(tokenizer)))
+        for data in dataloader:
+            yield data['inputs'], data['targets']
+
+def get_data_and_tokenizer (config: GptConfig) -> Tuple[Iterator, PreTrainedTokenizer]:
+    tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+    dataset = load_dataset("roneneldan/TinyStories", streaming=True)
+    iterator = get_iterator(config, dataset, tokenizer)
+
+    return iterator, tokenizer
