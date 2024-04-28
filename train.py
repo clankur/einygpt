@@ -6,12 +6,10 @@ from typing import Tuple, List, Dict
 from collections import OrderedDict
 from einops import rearrange
 
-from common import GptConfig, encode, decode, get_batch, train_data, val_data, lp_hyperparameters
+from common import hyperparameters, get_iterator_tokenizer_and_config
 from model import GptLanguageModel
 
 remote = True
-
-hyperparameters = GptConfig()
 
 if __name__ == "__main__":
 
@@ -28,9 +26,8 @@ if __name__ == "__main__":
         task.execute_remotely('default', clone=False, exit_process=True)
     logger = task.get_logger()
 
-    
+    data_iterator, tokenizer, hyperparameters = get_iterator_tokenizer_and_config(hyperparameters)
     einops_model = GptLanguageModel(hyperparameters)
-    
     m = einops_model.to(einops_model.device)
 
     # register hook
@@ -39,13 +36,14 @@ if __name__ == "__main__":
     # create a pytorch optimizer
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
 
+    
     # training the model
     for steps in range(m.max_epochs):
         # sample a batch of data
-        xb, yb = get_batch('train', m.block_size, m.batch_size, m.device)
+        xb, yb = next(data_iterator)
 
         # evaluate the loss
-        logits, loss, _ = m(xb, yb)
+        logits, loss, _ = m(xb.to(m.device), yb.to(m.device))
 
         logger.report_scalar(title="Train Loss", series="Train Loss",
                              value=loss.item(), iteration=steps)
@@ -59,7 +57,7 @@ if __name__ == "__main__":
     torch.save(m.state_dict(), 'model_weights.pth')
 
     start_str = "\n"
-    idx = torch.tensor(encode(start_str), dtype=torch.long,
+    idx = torch.tensor(tokenizer.encode(start_str), dtype=torch.long,
                        device=hyperparameters.device).unsqueeze(0)
-    print(decode(m.generate(
+    print(tokenizer.decode(m.generate(
         idx=idx, max_new_tokens=hyperparameters.block_size)[0].tolist()))

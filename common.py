@@ -10,12 +10,6 @@ from torch.utils.data import Dataset, DataLoader
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
 
-tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
-dataset = load_dataset("roneneldan/TinyStories", streaming=True)
-
-encode = tokenizer.encode
-decode = tokenizer.decode
-
 @dataclass
 class GptConfig:
     """hyperparameters for GptLanguageModel"""
@@ -30,10 +24,11 @@ class GptConfig:
     n_groups: int = 3
     n_layer: int = 6
     dropout: float = 0.2
-    vocab_size: int = tokenizer.vocab_size
     seed: int = 42
 
-hyperparameters = GptConfig()
+hyperparameters = GptConfig(
+    max_epochs=1
+)
 
 class Collator:
     def __init__ (self, tokenizer: PreTrainedTokenizer):
@@ -41,9 +36,14 @@ class Collator:
 
     def __call__(self, examples: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         batch = self.tokenizer.pad(examples, return_attention_mask=False, return_tensors='pt')
+
         return {
             "inputs": batch['input_ids'][:, :-1],
-            "targets": batch['input_ids'][:, 1:]
+            "inputs_position": batch['position'][:, :-1],
+            "inputs_sequence": batch['sequences'][:, :-1],
+            "targets": batch['input_ids'][:, 1:],
+            "targets_position": batch['position'][:, 1:],
+            "targets_sequence": batch['sequences'][:, 1:]
         }
     
 def package_data(dataset: Dataset, tokenizer: PreTrainedTokenizer, config: GptConfig):
@@ -125,12 +125,13 @@ def package_data(dataset: Dataset, tokenizer: PreTrainedTokenizer, config: GptCo
         return examples
 
 
-    return dataset.map(tokenize, 
-                       batched=True, 
-                       batch_size=config.batch_size
+    return dataset.map(
+        tokenize, 
+        batched=True, 
+        remove_columns=['text']
     ).map(chunk, batched=True, batch_size=config.batch_size)
 
-def get_iterator(config: GptConfig, dataset: Dataset, tokenizer: PreTrainedTokenizer) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+def make_iterator(config: GptConfig, dataset: Dataset, tokenizer: PreTrainedTokenizer) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
     batch_size = config.batch_size
     og_dataset = dataset.shuffle(config.seed)
     for epoch in itertools.count():
@@ -140,9 +141,10 @@ def get_iterator(config: GptConfig, dataset: Dataset, tokenizer: PreTrainedToken
         for data in dataloader:
             yield data['inputs'], data['targets']
 
-def get_data_and_tokenizer (config: GptConfig) -> Tuple[Iterator, PreTrainedTokenizer]:
+def get_iterator_tokenizer_and_config (config: GptConfig) -> Tuple[Iterator, PreTrainedTokenizer]:
     tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
-    dataset = load_dataset("roneneldan/TinyStories", streaming=True)
-    iterator = get_iterator(config, dataset, tokenizer)
+    dataset = load_dataset("roneneldan/TinyStories", streaming=True, split='train')
+    iterator = make_iterator(config, dataset, tokenizer)
+    config.vocab_size = tokenizer.vocab_size
 
-    return iterator, tokenizer
+    return iterator, tokenizer, config
