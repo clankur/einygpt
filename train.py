@@ -57,7 +57,10 @@ if __name__ == "__main__":
     torch.save(m.state_dict(), 'model_weights.pth')
 
     start_str = "\n"
-    idx = torch.tensor(tokenizer.encode(start_str), dtype=torch.long,
+    curr_token = tokenizer.encode(start_str)
+    idx = torch.tensor(curr_token, dtype=torch.long,
                        device=hyperparameters.device).unsqueeze(0)
+    # get length of current token
+
     print(tokenizer.decode(m.generate(
-        idx=idx, max_new_tokens=hyperparameters.block_size)[0].tolist()))
+        idx=idx, max_new_tokens=hyperparameters.block_size-len(curr_token))[0].tolist()))

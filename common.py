@@ -26,9 +26,7 @@ class GptConfig:
     dropout: float = 0.2
     seed: int = 42
 
-hyperparameters = GptConfig(
-    max_epochs=1
-)
+hyperparameters = GptConfig()
 
 class Collator:
     def __init__ (self, tokenizer: PreTrainedTokenizer):
