@@ -25,7 +25,8 @@ class GptConfig:
     n_layer: int = 6
     dropout: float = 0.2
     seed: int = 42
-
+    warmup_steps: int = 1000
+    
 hyperparameters = GptConfig()
 
 class Collator:
