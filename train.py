@@ -32,11 +32,15 @@ if __name__ == "__main__":
 
     # register hook
     # register_hook(m)
+    # use a torch scheduler
+    # linear warm up and cosine decay
+    # try setting up warm up and decay for learning rate
+
+
 
     # create a pytorch optimizer
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
 
-    
     # training the model
     for steps in range(m.max_epochs):
         # sample a batch of data
