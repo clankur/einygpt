@@ -5,7 +5,6 @@ from einops import rearrange, einsum
 from typing import List, Tuple, Optional
 from common import GptConfig, KVCacheType, BlocksKVCacheType
 
-torch.manual_seed(1337)
 
 class GptLanguageModel (nn.Module):
 
@@ -13,6 +12,9 @@ class GptLanguageModel (nn.Module):
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
+
+        torch.manual_seed(self.seed)
+
         self.token_embedding_table = nn.Parameter(
             torch.randn((self.vocab_size, self.n_embd)))
         self.position_embedding_table = nn.Parameter(
