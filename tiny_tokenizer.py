@@ -5,6 +5,7 @@ from tokenizers.pre_tokenizers import Whitespace
 from datasets import load_dataset
 from typing import Any, List, Optional
 import torch
+
 class TinyTokenizer:
     def __init__(self, tokenizer_path: Optional[str]=None) -> None:
         if tokenizer_path is None:
@@ -30,10 +31,6 @@ class TinyTokenizer:
     
     def decode(self, ids: List[int]) -> str:
         return self.tokenizer.decode(ids)
-    
-
-    def __call__(self, ) -> Any:
-        pass
 
     def __call__(self, examples: List[str] | str, padding="max_length", truncation:bool=True, max_length:Optional[int]=None, add_special_tokens:bool=True, return_tensors:str="pt", *args: Any, **kwds: Any):
         if padding == "max_length":
