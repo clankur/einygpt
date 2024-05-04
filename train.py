@@ -1,8 +1,6 @@
 import torch
-from torch import nn
 from clearml import Task
 from datetime import datetime
-from typing import Tuple, List, Dict
 from collections import OrderedDict
 from einops import rearrange
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -19,20 +17,16 @@ if __name__ == "__main__":
     # Format the date and time in a string
     formatted_date_time = current_date_time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # import hydra
-
     task = Task.init(project_name='nanogpt', task_name=formatted_date_time)
     if remote:
         task.execute_remotely('default', clone=False, exit_process=True)
     logger = task.get_logger()
 
+    task.connect(vars(hyperparameters))
     dataloader = TinyStoriesLoader(hyperparameters)
     einops_model = GptLanguageModel(hyperparameters)
     tokenizer = hyperparameters.tokenizer
     m = einops_model.to(einops_model.device)
-
-    # register hook
-    # register_hook(m)  
 
     # create a pytorch optimizer and scheduler
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
@@ -44,6 +38,7 @@ if __name__ == "__main__":
         inputs = next(dataloader)
         xb, yb = inputs['input_ids'][:, :-1], inputs['input_ids'][:, 1:]
 
+        # switch to chain schedulers after this
         # apply linear warm up for learning rate
         if steps < m.warmup_steps:
             lr_scale = min(1.0, float(steps + 1) / m.warmup_steps)
@@ -76,7 +71,6 @@ if __name__ == "__main__":
     curr_token = tokenizer.encode(start_str)
     idx = torch.tensor(curr_token, dtype=torch.long,
                        device=hyperparameters.device).unsqueeze(0)
-    # get length of current token
 
     print(tokenizer.decode(m.generate(
         idx=idx, max_new_tokens=hyperparameters.block_size-len(curr_token))[0].tolist()))
