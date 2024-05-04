@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from einops import rearrange, einsum
-from typing import List, Tuple, Optional
-from common import GptConfig, KVCacheType, BlocksKVCacheType
+from typing import Tuple, Optional
+from common import GptConfig, BlocksKVCacheType
 from torch.utils.checkpoint import checkpoint
 
 class GptLanguageModel (nn.Module):
