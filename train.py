@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
     # create a pytorch optimizer and scheduler
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=m.max_epochs, eta_min=1e-5)
+    scheduler = CosineAnnealingLR(optimizer, T_max=m.max_epochs, eta_min=m.learning_rate * .1)
 
     # training the model
     for steps in range(m.max_epochs):

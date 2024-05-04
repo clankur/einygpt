@@ -3,8 +3,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 from einops import rearrange, einsum
 from typing import List, Tuple, Optional
-from common import GptConfig, KVCacheType, BlocksKVCacheType
-
+from common import GptConfig, KVCacheType, BlocksKVCacheType, checkpoint_einsum
+from torch.utils.checkpoint import checkpoint
 
 class GptLanguageModel (nn.Module):
 
@@ -68,10 +68,10 @@ class GptLanguageModel (nn.Module):
 
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
-            q = einsum(x, w_q, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
-
+            q = checkpoint_einsum(x, w_q, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
+            
             # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
-            k, v = einsum(x, w_kv, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
+            k, v = checkpoint_einsum(x, w_kv, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
 
             if blocks_kvcache:  # not None if we are using cache
@@ -109,13 +109,13 @@ class GptLanguageModel (nn.Module):
 
             out = F.dropout(out, p=self.dropout, training=self.training)
 
-            x = x + out
+            x = checkpoint(lambda x, out: x + out, x, out)
             x = F.layer_norm(x, [C], weight=layer_scale[1])
             # switching back to referencing Q as T, so out = [B, T, C]
 
             # MLP block
             # [B, T, C] @ [C, 4C] -> [B, T, 4C]
-            mlp_hidden = einsum(x, fc1, 'b t c, c upscale_c -> b t upscale_c')
+            mlp_hidden = checkpoint_einsum(x, fc1, 'b t c, c upscale_c -> b t upscale_c')
             mlp_hidden = F.relu(mlp_hidden)
             # [B, T, 4C] @ [4C, C] -> [B, T, C]
             mlp_out = einsum(mlp_hidden, fc2, 'b t c, c downscale_c -> b t downscale_c')

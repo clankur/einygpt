@@ -6,23 +6,28 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 from tiny_tokenizer import TinyTokenizer
 from torch.utils.data import DataLoader
 import functools
+from einops import einsum
+from torch.utils.checkpoint import checkpoint
 
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
+
+def checkpoint_einsum(t1: torch.Tensor, t2: torch.Tensor, ein_expression: str) -> torch.Tensor:
+    return checkpoint(einsum, t1, t2, ein_expression)
 
 @dataclass
 class GptConfig:
     """hyperparameters for GptLanguageModel"""
 
-    batch_size: int = 64
-    block_size: int = 256
+    batch_size: int = 32
+    block_size: int = 512
     max_epochs: int = 5000
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    n_embd: int = 384
-    n_head: int = 6
-    n_groups: int = 3
-    n_layer: int = 6
+    n_embd: int = 768
+    n_head: int = 12
+    n_groups: int = 12
+    n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
     warmup_steps: int = 500

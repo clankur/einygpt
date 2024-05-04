@@ -15,7 +15,7 @@ class TinyTokenizer:
             dataset = load_dataset("roneneldan/TinyStories", split='train')
             dataset = dataset.map(filter_non_ascii, input_columns='text', batched=True, num_proc=4)
 
-            self.trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
+            self.trainer = BpeTrainer(special_tokens=["[UNK]", "[BOS]", "[SEP]", "[PAD]", "[MASK]"])
             self.tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
             self.tokenizer.pre_tokenizer = Whitespace()
             self.tokenizer.train_from_iterator(dataset['text'], trainer=self.trainer)
@@ -23,6 +23,7 @@ class TinyTokenizer:
         else:
             self.tokenizer = Tokenizer.from_file(tokenizer_path)
         
+        # variables needed for the model also defined by tokenizers fetched by AutoTokenizer
         self.pad_token_id = self.tokenizer.token_to_id("[PAD]")
         self.vocab_size = self.tokenizer.get_vocab_size()
 
