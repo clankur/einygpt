@@ -19,19 +19,19 @@ def checkpoint_einsum(t1: torch.Tensor, t2: torch.Tensor, ein_expression: str) -
 class GptConfig:
     """hyperparameters for GptLanguageModel"""
 
-    batch_size: int = 32
+    batch_size: int = 64
     block_size: int = 256
     max_epochs: int = 5000
-    learning_rate: float = 5e-4
+    learning_rate: float = 3e-4
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    n_embd: int = 768
-    n_head: int = 12
-    n_groups: int = 12
+    n_embd: int = 128
+    n_head: int = 16
+    n_groups: int = 16
     n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
     warmup_steps: int = 500
-    tokenizer: TinyTokenizer | PreTrainedTokenizer = TinyTokenizer("tiny_tokenizer.json") 
+    tokenizer: TinyTokenizer | PreTrainedTokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
     vocab_size: int = tokenizer.vocab_size
 
 hyperparameters = GptConfig()

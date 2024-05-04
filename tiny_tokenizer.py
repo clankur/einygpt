@@ -18,7 +18,7 @@ class TinyTokenizer:
             self.trainer = BpeTrainer(special_tokens=["[UNK]", "[BOS]", "[SEP]", "[PAD]", "[MASK]"])
             self.tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
             self.tokenizer.pre_tokenizer = Whitespace()
-            self.tokenizer.train_from_iterator(dataset['text'], trainer=self.trainer)
+            self.tokenizer.train_from_iterator(dataset['text'], trainer=self.trainer, length=2000)
             self.tokenizer.save("tiny_tokenizer.json")
         else:
             self.tokenizer = Tokenizer.from_file(tokenizer_path)
