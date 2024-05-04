@@ -6,14 +6,9 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 from tiny_tokenizer import TinyTokenizer
 from torch.utils.data import DataLoader
 import functools
-from einops import einsum
-from torch.utils.checkpoint import checkpoint
 
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
-
-def checkpoint_einsum(t1: torch.Tensor, t2: torch.Tensor, ein_expression: str) -> torch.Tensor:
-    return checkpoint(einsum, t1, t2, ein_expression)
 
 @dataclass
 class GptConfig:
