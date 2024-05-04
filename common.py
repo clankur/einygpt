@@ -20,9 +20,9 @@ class GptConfig:
     """hyperparameters for GptLanguageModel"""
 
     batch_size: int = 32
-    block_size: int = 512
+    block_size: int = 256
     max_epochs: int = 5000
-    learning_rate: float = 1e-3
+    learning_rate: float = 5e-4
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 768
     n_head: int = 12
