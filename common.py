@@ -19,7 +19,7 @@ class GptConfig:
     max_epochs: int = 5000
     learning_rate: float = 3e-4
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    n_embd: int = 128
+    n_embd: int = 64
     n_head: int = 16
     n_groups: int = 16
     n_layer: int = 12
