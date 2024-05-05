@@ -8,6 +8,7 @@ from common import hyperparameters, TinyStoriesLoader
 from model import GptLanguageModel
 
 remote = False
+load_last_checkpoint = False
 
 if __name__ == "__main__":
 
@@ -21,12 +22,18 @@ if __name__ == "__main__":
     if remote:
         task.execute_remotely('default', clone=False, exit_process=True)
     logger = task.get_logger()
-
     task.connect(vars(hyperparameters))
     dataloader = TinyStoriesLoader(hyperparameters)
     einops_model = GptLanguageModel(hyperparameters)
-    tokenizer = hyperparameters.tokenizer
+
+    if load_last_checkpoint:
+        try:
+            einops_model.load_state_dict(torch.load('model_weights.pth'))
+        except:
+            pass
+        
     m = einops_model.to(einops_model.device)
+    tokenizer = m.tokenizer
 
     # create a pytorch optimizer and scheduler
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
@@ -66,11 +73,9 @@ if __name__ == "__main__":
     print(loss.item())
 
     torch.save(m.state_dict(), 'model_weights.pth')
- 
     start_str = "\n"
     curr_token = tokenizer.encode(start_str)
     idx = torch.tensor(curr_token, dtype=torch.long,
                        device=hyperparameters.device).unsqueeze(0)
-
     print(tokenizer.decode(m.generate(
         idx=idx, max_new_tokens=hyperparameters.block_size-len(curr_token))[0].tolist()))
