@@ -69,7 +69,6 @@ class GptLanguageModel (nn.Module):
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
             q = einsum(x, w_q, 'b t c, c g num_kv d -> b g num_kv t d') # [B, g, num_kv_heads, T, d]
-            
             # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
             k, v = einsum(x, w_kv, 'b t c, s c num_kv d -> s b num_kv t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
@@ -132,12 +131,7 @@ class GptLanguageModel (nn.Module):
             B, T, C = logits.shape
             logits = rearrange(logits, 'b t c -> (b t) c')
             targets = rearrange(targets, 'b t -> (b t)')
-            loss = F.cross_entropy(logits, targets, reduction='none')
-
-            # zero out the loss for the padding tokens
-            padding_mask = (targets == self.tokenizer.pad_token_id)
-            loss = loss * ~padding_mask
-            loss = loss.sum() / (~padding_mask).sum()
+            loss = F.cross_entropy(logits, targets)
 
         return logits, loss, blocks_kvcache
 
