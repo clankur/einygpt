@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from einops import rearrange, einsum
-from typing import List, Tuple, Optional
-from common import GptConfig, KVCacheType, BlocksKVCacheType
-
-torch.manual_seed(1337)
+from typing import Tuple, Optional
+from common import GptConfig, BlocksKVCacheType
 
 class GptLanguageModel (nn.Module):
 
@@ -13,6 +11,9 @@ class GptLanguageModel (nn.Module):
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
+
+        torch.manual_seed(self.seed)
+
         self.token_embedding_table = nn.Parameter(
             torch.randn((self.vocab_size, self.n_embd)))
         self.position_embedding_table = nn.Parameter(
@@ -32,7 +33,7 @@ class GptLanguageModel (nn.Module):
             (self.n_layer, self.n_embd, self.n_groups, self.num_kv_heads, self.head_dim)) / self.n_embd ** 0.5) # [L, C, g, num_kv_heads, d] 
         
         self.kv_proj =  nn.Parameter(torch.randn(
-            (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.head_dim ** 0.5) # [L, 2, C, num_kv_heads, d]
+            (self.n_layer, 2, self.n_embd, self.num_kv_heads, self.head_dim)) / self.n_embd ** 0.5) # [L, 2, C, num_kv_heads, d]
         
         # mixes the head outputs 
         self.out_proj = nn.Parameter(torch.randn(
@@ -67,7 +68,7 @@ class GptLanguageModel (nn.Module):
             x = F.layer_norm(x, (C,), weight=layer_scale[0])
 
             q = einsum(x, w_q, 'b t c, c g kv_head d -> b g kv_head t d') # [B, g, num_kv_heads, T, d]
-
+            
             # [B, T, C] @ [2, C, num_kv_heads, d] -> [2, B, T, num_kv_heads, d]
             k, v = einsum(x, w_kv, 'b t c, s c kv_head d -> s b kv_head t d') # 2 [B, num_kv_heads, T, d]
             # will reduce on C dimension
@@ -130,8 +131,13 @@ class GptLanguageModel (nn.Module):
             B, T, C = logits.shape
             logits = rearrange(logits, 'b t c -> (b t) c')
             targets = rearrange(targets, 'b t -> (b t)')
-            loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets, reduction='none')
 
+            # zero out the loss for the padding tokens
+            padding_mask = (targets == self.tokenizer.pad_token_id)
+            loss = loss * ~padding_mask
+            loss = loss.sum() / (~padding_mask).sum()
+            
         return logits, loss, blocks_kvcache
 
     def generate(self, idx: str, max_new_tokens: int) -> str:
