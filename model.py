@@ -4,7 +4,6 @@ from torch.nn import functional as F
 from einops import rearrange, einsum
 from typing import Tuple, Optional
 from common import GptConfig, BlocksKVCacheType
-from torch.utils.checkpoint import checkpoint
 
 class GptLanguageModel (nn.Module):
 
@@ -131,8 +130,13 @@ class GptLanguageModel (nn.Module):
             B, T, C = logits.shape
             logits = rearrange(logits, 'b t c -> (b t) c')
             targets = rearrange(targets, 'b t -> (b t)')
-            loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets, reduction='none')
 
+            # zero out the loss for the padding tokens
+            padding_mask = (targets == self.tokenizer.pad_token_id)
+            loss = loss * ~padding_mask
+            loss = loss.sum() / (~padding_mask).sum()
+            
         return logits, loss, blocks_kvcache
 
     def generate(self, idx: str, max_new_tokens: int) -> str:

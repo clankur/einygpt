@@ -1,8 +1,6 @@
 import torch
 from clearml import Task
 from datetime import datetime
-from collections import OrderedDict
-from einops import rearrange
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from common import hyperparameters, TinyStoriesLoader
 from model import GptLanguageModel
@@ -23,7 +21,7 @@ if __name__ == "__main__":
         task.execute_remotely('default', clone=False, exit_process=True)
     logger = task.get_logger()
     task.connect(vars(hyperparameters))
-    dataloader = TinyStoriesLoader(hyperparameters)
+    dataloader = TinyStoriesLoader(hyperparameters, split='train')
     einops_model = GptLanguageModel(hyperparameters)
 
     if load_last_checkpoint:

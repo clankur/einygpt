@@ -10,6 +10,12 @@ import functools
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
 
+def get_gpt2_tokenizer() -> PreTrainedTokenizer:
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    print(tokenizer.vocab_size)
+    tokenizer.add_special_tokens({'pad_token': '<PAD>'})
+    return tokenizer
+
 @dataclass
 class GptConfig:
     """hyperparameters for GptLanguageModel"""
@@ -17,23 +23,23 @@ class GptConfig:
     batch_size: int = 64
     block_size: int = 256
     max_epochs: int = 5000
-    learning_rate: float = 3e-4
+    learning_rate: float = 3.0e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
-    n_head: int = 16
-    n_groups: int = 16
-    n_layer: int = 12
+    n_head: int = 8
+    n_groups: int = 8
+    n_layer: int = 8
     dropout: float = 0.2
     seed: int = 42
-    warmup_steps: int = 500
-    tokenizer: TinyTokenizer | PreTrainedTokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
-    vocab_size: int = tokenizer.vocab_size
+    warmup_steps: int = .1 * max_epochs 
+    tokenizer: TinyTokenizer | PreTrainedTokenizer =  get_gpt2_tokenizer() 
+    vocab_size: int = tokenizer.vocab_size + 1
 
 hyperparameters = GptConfig()
 
 class TinyStoriesLoader:
 
-    def __init__(self, config: GptConfig) -> None:
+    def __init__(self, config: GptConfig, split:str='train') -> None:
         batch_size, max_length, num_workers = config.batch_size, config.block_size, 0
         self.tokenizer = config.tokenizer
 
@@ -48,7 +54,7 @@ class TinyStoriesLoader:
             return_tensors="pt"
         )
 
-        dataset = load_dataset("roneneldan/TinyStories", streaming=True, split='train')
+        dataset = load_dataset("roneneldan/TinyStories", streaming=True, split=split)
 
         tokenized = dataset.map(tokenize, batched=True, input_columns=['text'], remove_columns=["text"])
 
