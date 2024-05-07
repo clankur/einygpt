@@ -21,7 +21,7 @@ class GptConfig:
 
     batch_size: int = 64
     block_size: int = 256
-    max_steps: int = 600000
+    max_steps: int = 900000
     learning_rate: float = 3.0e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
