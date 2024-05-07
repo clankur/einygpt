@@ -12,7 +12,6 @@ BlocksKVCacheType = List[Optional[KVCacheType]]
 
 def get_gpt2_tokenizer() -> PreTrainedTokenizer:
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    print(tokenizer.vocab_size)
     tokenizer.add_special_tokens({'pad_token': '<PAD>'})
     return tokenizer
 
@@ -22,13 +21,13 @@ class GptConfig:
 
     batch_size: int = 64
     block_size: int = 256
-    max_steps: int = 300000
+    max_steps: int = 600000
     learning_rate: float = 3.0e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
     n_head: int = 8
-    n_groups: int = 8
-    n_layer: int = 8
+    n_groups: int = n_head
+    n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
     warmup_steps: int = .1 * max_steps 
