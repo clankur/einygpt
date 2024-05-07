@@ -37,11 +37,14 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
     scheduler = CosineAnnealingLR(optimizer, T_max=m.max_steps, eta_min=m.learning_rate * .1)
     # training the model
+
+    epochs = 0
     for steps in range(m.max_steps):
         # sample a batch of data
         try:
             inputs = next(dataloader)
         except StopIteration:
+            epochs += 1
             hyperparameters.seed += 1
             dataloader = TinyStoriesLoader(hyperparameters, split='train')
             inputs = next(dataloader)
@@ -64,7 +67,9 @@ if __name__ == "__main__":
                              value=loss.item(), iteration=steps)
         logger.report_scalar(title="Learning Rate", series="Learning Rate",
                                 value=optimizer.param_groups[0]['lr'], iteration=steps)
-
+        logger.report_scalar(title="Epochs", series="Epochs",
+                                value=epochs, iteration=steps)
+        
         optimizer.zero_grad(set_to_none=True)  # clear the gradients
 
         loss.backward()  # compute gradients
