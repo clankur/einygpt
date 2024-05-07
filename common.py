@@ -22,7 +22,7 @@ class GptConfig:
 
     batch_size: int = 64
     block_size: int = 256
-    max_epochs: int = 5000
+    max_steps: int = 300000
     learning_rate: float = 3.0e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
@@ -31,7 +31,7 @@ class GptConfig:
     n_layer: int = 8
     dropout: float = 0.2
     seed: int = 42
-    warmup_steps: int = .1 * max_epochs 
+    warmup_steps: int = .1 * max_steps 
     tokenizer: TinyTokenizer | PreTrainedTokenizer =  get_gpt2_tokenizer() 
     vocab_size: int = tokenizer.vocab_size + 1
 
@@ -55,6 +55,7 @@ class TinyStoriesLoader:
         )
 
         dataset = load_dataset("roneneldan/TinyStories", streaming=True, split=split)
+        dataset = dataset.shuffle(seed=config.seed)
 
         tokenized = dataset.map(tokenize, batched=True, input_columns=['text'], remove_columns=["text"])
 

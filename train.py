@@ -35,12 +35,17 @@ if __name__ == "__main__":
 
     # create a pytorch optimizer and scheduler
     optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=m.max_epochs, eta_min=m.learning_rate * .1)
-
+    scheduler = CosineAnnealingLR(optimizer, T_max=m.max_steps, eta_min=m.learning_rate * .1)
     # training the model
-    for steps in range(m.max_epochs):
+    for steps in range(m.max_steps):
         # sample a batch of data
-        inputs = next(dataloader)
+        try:
+            inputs = next(dataloader)
+        except StopIteration:
+            hyperparameters.seed += 1
+            dataloader = TinyStoriesLoader(hyperparameters, split='train')
+            inputs = next(dataloader)
+
         xb, yb = inputs['input_ids'][:, :-1], inputs['input_ids'][:, 1:]
 
         # switch to chain schedulers after this
