@@ -33,6 +33,7 @@ class GptConfig:
     warmup_steps: int = .1 * max_steps 
     tokenizer: TinyTokenizer | PreTrainedTokenizer =  get_gpt2_tokenizer() 
     vocab_size: int = tokenizer.vocab_size + 1
+    top_k: int = 5
 
 hyperparameters = GptConfig()
 

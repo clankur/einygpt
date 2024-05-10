@@ -153,8 +153,8 @@ class GptLanguageModel (nn.Module):
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
             # get a random sample from the top 5
-            top_probs, top_indices = torch.topk(probs, 5)
-            random_index = torch.randint(0, 5, size=(1,)) 
+            top_probs, top_indices = torch.topk(probs, self.top_k)
+            random_index = torch.randint(0, self.top_k, size=(1,)) 
             next_idx = top_indices[0, random_index].unsqueeze(0)
             curr_idx = next_idx
             idx = torch.cat([idx, next_idx], dim=1)
