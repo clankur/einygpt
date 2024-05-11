@@ -26,7 +26,7 @@ class GptConfig:
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
     n_head: int = 8
-    n_groups: int = 4
+    n_groups: int = 8
     n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
