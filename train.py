@@ -76,8 +76,6 @@ if __name__ == "__main__":
         scheduler.step()
 
     print(loss.item())
-    training_end_time = datetime.now()
-    print("Time taken for training: ", str(training_end_time - current_date_time))
 
     torch.save(m.state_dict(), 'model_weights.pth')
 
