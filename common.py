@@ -21,12 +21,12 @@ class GptConfig:
 
     batch_size: int = 64
     block_size: int = 256
-    max_steps: int = 900000
+    max_steps: int = 300000
     learning_rate: float = 3.0e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
     n_head: int = 8
-    n_groups: int = n_head
+    n_groups: int = 4
     n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
@@ -92,3 +92,21 @@ class TinyStoriesLoader:
         except StopIteration:
             self.iterator = iter(self.dataloader)
             raise StopIteration
+
+def compute_perplexity (model: torch.nn.Module, dataset: TinyStoriesLoader): 
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+    with torch.no_grad():
+        for batch in dataset:
+            input_ids = batch['input_ids'].to(model.device)
+            xb, yb = input_ids[:, :-1], input_ids[:, 1:]
+            _, loss, _ = model(xb, yb)
+
+            total_loss += loss
+            total_tokens += input_ids.numel()
+
+    return torch.exp(-total_loss / total_tokens)
+
+
+    
