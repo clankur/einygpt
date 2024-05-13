@@ -26,12 +26,12 @@ class GptConfig:
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
     n_head: int = 8
-    n_groups: int = 8
+    n_groups: int = 4
     n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
     warmup_steps: int = .1 * max_steps 
-    tokenizer: TinyTokenizer | PreTrainedTokenizer =  get_gpt2_tokenizer() 
+    tokenizer: TinyTokenizer | PreTrainedTokenizer =  TinyTokenizer()
     vocab_size: int = tokenizer.vocab_size + 1
     top_k: int = 5
 
