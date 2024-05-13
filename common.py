@@ -31,7 +31,7 @@ class GptConfig:
     dropout: float = 0.2
     seed: int = 42
     warmup_steps: int = .1 * max_steps 
-    tokenizer: TinyTokenizer | PreTrainedTokenizer =  TinyTokenizer()
+    tokenizer: TinyTokenizer | PreTrainedTokenizer =  TinyTokenizer("tiny_tokenizer.json")
     vocab_size: int = tokenizer.vocab_size + 1
     top_k: int = 5
 
