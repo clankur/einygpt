@@ -2,3 +2,4 @@ __pycache__
 *.pth
 test.ipynb
 tiny_tokenizer.json
+past_experiments

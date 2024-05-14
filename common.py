@@ -12,7 +12,6 @@ BlocksKVCacheType = List[Optional[KVCacheType]]
 
 def get_gpt2_tokenizer() -> PreTrainedTokenizer:
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    print(tokenizer.vocab_size)
     tokenizer.add_special_tokens({'pad_token': '<PAD>'})
     return tokenizer
 
@@ -22,18 +21,19 @@ class GptConfig:
 
     batch_size: int = 64
     block_size: int = 256
-    max_epochs: int = 5000
+    max_steps: int = 300000
     learning_rate: float = 3.0e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     n_embd: int = 64
     n_head: int = 8
-    n_groups: int = 8
-    n_layer: int = 8
+    n_groups: int = 4
+    n_layer: int = 12
     dropout: float = 0.2
     seed: int = 42
-    warmup_steps: int = .1 * max_epochs 
-    tokenizer: TinyTokenizer | PreTrainedTokenizer =  get_gpt2_tokenizer() 
+    warmup_steps: int = .1 * max_steps 
+    tokenizer: TinyTokenizer | PreTrainedTokenizer =  TinyTokenizer("tiny_tokenizer.json")
     vocab_size: int = tokenizer.vocab_size + 1
+    top_k: int = 10
 
 hyperparameters = GptConfig()
 
@@ -55,6 +55,7 @@ class TinyStoriesLoader:
         )
 
         dataset = load_dataset("roneneldan/TinyStories", streaming=True, split=split)
+        dataset = dataset.shuffle(seed=config.seed)
 
         tokenized = dataset.map(tokenize, batched=True, input_columns=['text'], remove_columns=["text"])
 
@@ -91,3 +92,18 @@ class TinyStoriesLoader:
         except StopIteration:
             self.iterator = iter(self.dataloader)
             raise StopIteration
+
+def compute_perplexity (model: torch.nn.Module, dataset: TinyStoriesLoader): 
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+    with torch.no_grad():
+        for batch in dataset:
+            input_ids = batch['input_ids'].to(model.device)
+            xb, yb = input_ids[:, :-1], input_ids[:, 1:]
+            _, loss, _ = model(xb, yb)
+
+            total_loss += loss
+            total_tokens += input_ids.numel()
+
+    return torch.exp(-total_loss / total_tokens)

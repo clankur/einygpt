@@ -152,7 +152,12 @@ class GptLanguageModel (nn.Module):
             )
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
-            next_idx = torch.multinomial(probs, num_samples=1)
+        
+            # sanple top k
+            top_probs, top_indices = torch.topk(probs, self.top_k)
+            sample = torch.multinomial(top_probs, 1)
+            next_idx = top_indices[0, sample]
+            
             curr_idx = next_idx
             idx = torch.cat([idx, next_idx], dim=1)
         return idx
