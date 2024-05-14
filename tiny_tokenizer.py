@@ -1,4 +1,4 @@
-from tokenizers import Tokenizer
+from tokenizers import Tokenizer 
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace
@@ -10,7 +10,7 @@ class TinyTokenizer:
     def __init__(self, tokenizer_path: Optional[str]=None) -> None:
         if tokenizer_path is None:
             def filter_non_ascii(examples: List[str]) -> List[str]:
-                return { "text" : [''.join(char for char in text if ord(char) < 128) for text in examples] }
+                return { "text" : [''.join(char for char in text if ord(char) < 128 or char == "\n") for text in examples] }
 
             dataset = load_dataset("roneneldan/TinyStories", split='train')
             dataset = dataset.map(filter_non_ascii, input_columns='text', batched=True, num_proc=4)
