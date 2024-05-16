@@ -6,6 +6,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 from tiny_tokenizer import TinyTokenizer
 from torch.utils.data import DataLoader
 import functools
+import math
 
 KVCacheType = Tuple[torch.Tensor, torch.Tensor]
 BlocksKVCacheType = List[Optional[KVCacheType]]
@@ -106,4 +107,4 @@ def compute_perplexity (model: torch.nn.Module, dataset: TinyStoriesLoader):
             total_loss += loss
             total_tokens += yb.numel()
 
-    return torch.exp(total_loss / total_tokens)
+    return math.exp(total_loss / total_tokens)
