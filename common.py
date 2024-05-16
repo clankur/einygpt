@@ -104,6 +104,6 @@ def compute_perplexity (model: torch.nn.Module, dataset: TinyStoriesLoader):
             _, loss, _ = model(xb, yb)
 
             total_loss += loss
-            total_tokens += input_ids.numel()
+            total_tokens += yb.numel()
 
-    return torch.exp(-total_loss / total_tokens)
+    return torch.exp(total_loss / total_tokens)
