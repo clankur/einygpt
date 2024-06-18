@@ -4,24 +4,25 @@ from einops import rearrange
 from torch.nn import functional as F
 from typing import List, Tuple, Optional
 from common import GptConfig, KVCacheType, BlocksKVCacheType
+from mup import MuReadout
 
 torch.manual_seed(1337)
 
 class MultiHeadAttention(nn.Module):
     """multiple heads of self attention in parallel"""
 
-    def __init__(self, hyperparameters: GptConfig, num_heads: int, head_size: int) -> None:
+    def __init__(self, hyperparameters: GptConfig, num_heads: int, head_dim: int) -> None:
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
 
         self.num_heads = num_heads
-        self.head_size = head_size
+        self.head_dim = head_dim
 
         self.key = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.query = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.value = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.out_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.dropout = nn.Dropout(self.dropout)
 
         self.register_buffer('tril', torch.tril(
@@ -41,7 +42,7 @@ class MultiHeadAttention(nn.Module):
 
         k, v, q = self.key(x), self.value(x), self.query(x)  # [B, T, C]
         # C = n * h where n is the number of heads, h is the head dimension, C is the model dimension
-        k, v, q = [t.reshape(B, T, self.num_heads, self.head_size)
+        k, v, q = [t.reshape(B, T, self.num_heads, self.head_dim)
                    for t in (k, v, q)]  # [B, T, C] -> [B, T, n, h]
         k, v, q = [torch.transpose(x, 1, 2) for x in (
             k, v, q)]  # [B, T, n, h] -> [B, n, T, h]
@@ -58,7 +59,8 @@ class MultiHeadAttention(nn.Module):
 
         # [B, n, Q, h] @ [B, n, K, h] -> [B, n, Q, K]
         att_wei = torch.einsum('bnqh,bnkh->bnqk', q, k) * \
-            (self.head_size**-0.5)
+            (self.head_dim)
+
         # casual masking
         att_wei = att_wei.masked_fill(
             self.tril[:, :, :T, :T] == 0, float('-inf'))
@@ -70,7 +72,7 @@ class MultiHeadAttention(nn.Module):
         out = torch.einsum('bnqk,bnkh->bnqh', att_wei, v)
         out = rearrange(out, 'b n q h -> b q (n h)')
 
-        out = self.proj(out) # mix the heads
+        out = self.out_proj(out) # mix the heads
         out = self.dropout(out)  # apply dropout
         return out, kvcache
 
@@ -105,9 +107,9 @@ class Block (nn.Module):
 
     def __init__(self, hyperparameters: GptConfig, n_embd: int, n_head: int) -> None:
         super().__init__()
-        head_size = n_embd // n_head
+        head_dim = n_embd // n_head
         self.sa_heads = MultiHeadAttention(
-            hyperparameters=hyperparameters, num_heads=n_head, head_size=head_size)
+            hyperparameters=hyperparameters, num_heads=n_head, head_dim=head_dim)
         self.ffwd = FeedForward(hyperparameters=hyperparameters, n_embd=n_embd)
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
@@ -143,7 +145,7 @@ class GPTLanguageModel(nn.Module):
         self.blocks = nn.ModuleList(
             [Block(hyperparameters, self.n_embd, self.n_head) for _ in range(self.n_layer)])
         self.ln_f = nn.LayerNorm(self.n_embd)
-        self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False)
+        self.lm_head = MuReadout(self.n_embd, self.vocab_size, bias=False)
 
     def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, blocks_kvcache: Optional[BlocksKVCacheType] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[BlocksKVCacheType]]:
         """
