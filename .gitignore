@@ -1,2 +1,5 @@
 __pycache__
-model_weights.pth
+*.pth
+past_experiments
+test.ipynb
+*.json

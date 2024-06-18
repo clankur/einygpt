@@ -7,7 +7,6 @@ from collections import OrderedDict
 from einops import rearrange
 
 from common import GptConfig, encode, decode, train_data, val_data, lp_hyperparameters
-from NanoGPTLangugageModel import NanoGPTLanguageModel
 from model import GptLanguageModel
 
 remote = False 
