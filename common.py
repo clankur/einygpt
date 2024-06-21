@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizer
-from tiny_tokenizer import TinyTokenizer
 from torch.utils.data import DataLoader
 import functools
 import math
@@ -32,7 +31,7 @@ class GptConfig:
     dropout: float = 0.2
     seed: int = 42
     warmup_steps: int = .1 * max_steps 
-    tokenizer: TinyTokenizer | PreTrainedTokenizer =  TinyTokenizer("tiny_tokenizer.json")
+    tokenizer: PreTrainedTokenizer = get_gpt2_tokenizer() 
     vocab_size: int = tokenizer.vocab_size + 1
     top_k: int = 10
 
