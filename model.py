@@ -13,11 +13,13 @@ class Block(nn.Module):
         for k, v in hyperparameters.__dict__.items():
             setattr(self, k, v)
 
+        self.head_dim = self.n_embd // self.n_head
+
         self.key = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.query = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.value = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.out_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.dropout = nn.Dropout(self.dropout)
+        self.dropout_param = nn.Dropout(self.dropout)
         self.register_buffer(
             "tril", torch.tril(torch.ones(1, 1, self.block_size, self.block_size))
         )
@@ -40,7 +42,7 @@ class Block(nn.Module):
         k, v, q = self.key(x), self.value(x), self.query(x)  # [B, T, C]
         # C = n * h where n is the number of heads, h is the head dimension, C is the model dimension
         k, v, q = [
-            t.reshape(B, T, self.num_heads, self.head_dim) for t in (k, v, q)
+            t.reshape(B, T, self.n_head, self.head_dim) for t in (k, v, q)
         ]  # [B, T, C] -> [B, T, n, h]
         k, v, q = [
             torch.transpose(x, 1, 2) for x in (k, v, q)
@@ -66,19 +68,19 @@ class Block(nn.Module):
         # don't really get the dimensions defined in self.tril
 
         att_wei = F.softmax(att_wei, dim=-1)
-        att_wei = self.dropout(att_wei)
+        att_wei = self.dropout_param(att_wei)
         # [B, n, Q, K] @ [B, n, K, h] -> [B, n, Q, h]
         out = torch.einsum("bnqk,bnkh->bnqh", att_wei, v)
         out = rearrange(out, "b n q h -> b q (n h)")
 
         out = self.out_proj(out)  # mix the heads
-        heads_out = self.dropout(out)  # apply dropout
+        heads_out = self.dropout_param(out)  # apply dropout
 
         x = x + heads_out  # residual connection adding to the heads
         x = mlp_out = self.ln2(x)
 
         for layer in self.mlp:
-            mlp_out += layer(mlp_out)
+            mlp_out = layer(mlp_out)
         x += mlp_out  # residual connection adding to ffwd
 
         return x, kvcache
@@ -94,7 +96,7 @@ class GptLanguageModel(nn.Module):
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embd)
         self.blocks = nn.ModuleList(
             [
-                Block(hyperparameters, self.n_embd, self.n_head)
+                Block(hyperparameters)
                 for _ in range(self.n_layer)
             ]
         )
@@ -105,8 +107,8 @@ class GptLanguageModel(nn.Module):
     def forward(
         self,
         idx: torch.Tensor,
-        targets: torch.Tensor,
-        kvcache: Optional[BlocksKVCacheType],
+        targets: Optional[torch.Tensor] = None,
+        kvcache: Optional[BlocksKVCacheType] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[BlocksKVCacheType]]:
         B, T = idx.shape
 
@@ -132,8 +134,9 @@ class GptLanguageModel(nn.Module):
         else:
             # reshape logits and targets to [B*T, C] and [B*T] respectively
             B, T, C = logits.shape
-            logits = logits.view(B * T, C)
-            targets = targets.view(B * T)
+
+            logits = rearrange(logits, 'b t c -> (b t) c')
+            targets = rearrange(targets, 'b t -> (b t)')
 
             loss = F.cross_entropy(logits, targets)
 
