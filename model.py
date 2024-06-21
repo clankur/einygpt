@@ -16,7 +16,7 @@ class Block(nn.Module):
         self.head_dim = self.n_embd // self.n_head
 
         self.key = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.query = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.query = nn.Parameter(torch.zeros(self.n_embd, self.n_embd))
         self.value = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.out_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.dropout_param = nn.Dropout(self.dropout)
@@ -33,6 +33,9 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(self.n_embd)
         self.ln2 = nn.LayerNorm(self.n_embd)
 
+        # per mup paper, scaling is 1 / d instead of 1 / sqrt(d) with attn_mul
+        self.scaling = 1 / self.head_dim * self.attn_mul
+        
     def forward(self, x: torch.Tensor, kvcache: KVCacheType) -> Tuple[torch.Tensor]:
         x = self.ln1(x)
 
@@ -61,8 +64,8 @@ class Block(nn.Module):
             kvcache = (k, v)
 
         # [B, n, Q, h] @ [B, n, K, h] -> [B, n, Q, K]
-        att_wei = torch.einsum("bnqh,bnkh->bnqk", q, k) * (self.head_dim)
-
+        att_wei = torch.einsum("bnqh,bnkh->bnqk", q, k) * self.scaling
+        
         # casual masking
         att_wei = att_wei.masked_fill(self.tril[:, :, :T, :T] == 0, float("-inf"))
         # don't really get the dimensions defined in self.tril
