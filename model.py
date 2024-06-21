@@ -81,7 +81,7 @@ class Block(nn.Module):
 
         for layer in self.mlp:
             mlp_out = layer(mlp_out)
-        x += mlp_out  # residual connection adding to ffwd
+        x = x + mlp_out  # residual connection adding to ffwd
 
         return x, kvcache
 
@@ -101,8 +101,8 @@ class GptLanguageModel(nn.Module):
             ]
         )
         self.ln_f = nn.LayerNorm(self.n_embd)
-        # self.lm_head = MuReadout(self.n_embd, self.vocab_size, bias=False)
-        self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False)
+        self.lm_head = MuReadout(self.n_embd, self.vocab_size, bias=False)
+        # self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False)
 
     def forward(
         self,

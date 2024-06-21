@@ -6,7 +6,7 @@ from common import hyperparameters, TinyStoriesLoader
 from model import GptLanguageModel
 from mup import MuAdamW
 
-remote = True
+remote = False 
 load_last_checkpoint = False
 
 if __name__ == "__main__":
@@ -35,8 +35,8 @@ if __name__ == "__main__":
     tokenizer = m.tokenizer
 
     # create a pytorch optimizer and scheduler
-    optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
-    # optimizer = MuAdamW(m.parameters(), lr=m.learning_rate)
+    # optimizer = torch.optim.AdamW(m.parameters(), lr=m.learning_rate)
+    optimizer = MuAdamW(m.parameters(), lr=m.learning_rate)
 
     scheduler = CosineAnnealingLR(optimizer, T_max=m.max_steps, eta_min=m.learning_rate * .1)
 
@@ -63,10 +63,12 @@ if __name__ == "__main__":
         logits, loss, _ = m(xb.to(m.device), yb.to(m.device))
         
         if steps % 100 == 0:  
+            lr = optimizer.param_groups[0]['lr']
+            print(f'Step {steps} - loss = {loss} - learning rate {lr}')
             logger.report_scalar(title="Train Loss", series="Train Loss",
                                 value=loss.item(), iteration=steps)
             logger.report_scalar(title="Learning Rate", series="Learning Rate",
-                                    value=optimizer.param_groups[0]['lr'], iteration=steps)
+                                    value=lr, iteration=steps)
             logger.report_scalar(title="Epochs", series="Epochs",
                                     value=epochs, iteration=steps)
         

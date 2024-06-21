@@ -34,6 +34,7 @@ class GptConfig:
     tokenizer: PreTrainedTokenizer = get_gpt2_tokenizer() 
     vocab_size: int = tokenizer.vocab_size + 1
     top_k: int = 10
+    att_mult: float = 1.0
 
 hyperparameters = GptConfig()
 
