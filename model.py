@@ -84,7 +84,7 @@ class Block(nn.Module):
         return x, kvcache
 
 
-class GPTLanguageModel(nn.Module):
+class GptLanguageModel(nn.Module):
     def __init__(self, hyperparameters: GptConfig) -> None:
         super().__init__()
         for k, v in hyperparameters.__dict__.items():
@@ -99,7 +99,8 @@ class GPTLanguageModel(nn.Module):
             ]
         )
         self.ln_f = nn.LayerNorm(self.n_embd)
-        self.lm_head = MuReadout(self.n_embd, self.vocab_size, bias=False)
+        # self.lm_head = MuReadout(self.n_embd, self.vocab_size, bias=False)
+        self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False)
 
     def forward(
         self,
